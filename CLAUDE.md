@@ -38,20 +38,17 @@ agent/              # Main package
     rag.py          # Ollama embeddings → ChromaDB, similarity retrieval
     annotator.py    # Ollama LLM prompting with RAG context (uses Jinja templates)
     pr_creator.py   # Applies annotations to files, git commit, GitHub PR
+  lsp/
+    __init__.py     # LSP package init
+    __main__.py     # python -m agent.lsp entry
+    server.py       # pygls LSP server (diagnostics, code lens, code actions, commands)
+    analyzer.py     # Bridge: runs LangGraph pipeline → list[SuggestionResult]
   mcp/
     server.py       # FastMCP server with 3 tools
 tests/              # pytest tests (scanner, parser, rag helpers)
-vscode-extension/   # VS Code extension (TypeScript)
-  src/
-    extension.ts         # Entry point, commands, activation
-    agent-client.ts      # Spawns ril2m CLI, parses JSON output
-    types.ts             # Shared TS types (Suggestion, AnalyzeResult)
-    suggestions-provider.ts  # Sidebar tree view grouped by file
-    summary-view.ts      # Webview panel with stats (high/med/low confidence)
-    codelens-provider.ts # Inline "Apply @AccessMode(…)" above test methods
-    diagnostics.ts       # Warning squiggles on unannotated tests
-    annotation-applier.ts # WorkspaceEdit to insert annotation + import
-  package.json         # Extension manifest, commands, settings schema
+vscode-extension/   # VS Code extension (thin JS shim — NO TypeScript)
+  extension.js      # ~20 lines: spawns Python LSP via stdio
+  package.json      # Extension manifest, commands, settings schema
 ```
 
 ## Key conventions
@@ -86,23 +83,25 @@ pytest -v tests/test_scanner.py
 - **Change LLM prompt**: Edit the `.jinja` files in `agent/prompts/` — no Python changes needed.
 - **Add MCP tool**: Add `@mcp.tool()` function in `agent/mcp/server.py`.
 - **Change Ollama model**: Update `OLLAMA_LLM_MODEL` or `OLLAMA_EMBED_MODEL` in `.env`.
-- **Add VS Code command**: Add to `contributes.commands` in `vscode-extension/package.json`, register in `extension.ts`.
-- **Build extension**: `cd vscode-extension && npm install && npm run compile`.
+- **Add VS Code command**: Add to `contributes.commands` in `vscode-extension/package.json`, implement handler in `agent/lsp/server.py` with `@server.command()`.
+- **Build extension**: `cd vscode-extension && npm install && npm run package`.
 
 ## VS Code extension
 
-The extension in `vscode-extension/` is a TypeScript VS Code extension that calls the `ril2m` CLI with `--json` and renders results. It does NOT embed Python — it spawns the CLI as a child process. Key architecture:
+The extension is **100% Python logic** — all VS Code features (diagnostics, code lens, code actions, commands) are implemented in the pygls LSP server at `agent/lsp/server.py`. The `vscode-extension/` folder contains only:
 
-- **agent-client.ts** spawns `ril2m analyze <path> --json` and parses stdout JSON.
-- Settings (`ril2m.pythonPath`, `ril2m.agentPath`, etc.) are forwarded as env vars.
-- **SuggestionsProvider** (tree view) groups suggestions by file with confidence icons.
-- **CodeLensProvider** adds inline "Apply" buttons above unannotated `void testXxx()` methods.
-- **DiagnosticsManager** publishes Warning-level diagnostics on the method declaration.
-- **annotation-applier.ts** uses `WorkspaceEdit` to insert the annotation line + import.
+- **extension.js** (~20 lines of JS) — thin shim that spawns `python -m agent.lsp.server` over stdio. This is the minimum VS Code requires; it contains zero logic.
+- **package.json** — extension manifest declaring commands and settings.
+
+Key architecture of the Python LSP server:
+- `server.py` uses **pygls** `LanguageServer` with `@server.command()` for commands, `@server.feature(TEXT_DOCUMENT_CODE_ACTION)` for quick fixes, `@server.feature(TEXT_DOCUMENT_CODE_LENS)` for inline lenses.
+- `analyzer.py` bridges the LSP server to the LangGraph pipeline — runs the graph and returns lightweight `SuggestionResult` dataclasses.
+- Suggestions are cached in-memory (`dict[uri, list[SuggestionResult]]`) and published as diagnostics.
+- `_insert_annotation()` edits Java files server-side (same logic as `pr_creator.py`).
 
 ## Gotchas
 
 - The parser regex expects standard JUnit 5 patterns (`@Test`, `@ParameterizedTest`). Unusual formatting may be missed.
 - ChromaDB vector store is persisted to `chroma_db/` — delete it to rebuild the index.
 - The PR creator modifies files in-place; it works on the actual project checkout. Make sure the project path is a git repo with a remote named `origin`.
-- The VS Code extension requires the `ril2m` CLI to be installed and accessible. Set `ril2m.pythonPath` or `ril2m.agentPath` in extension settings if not on PATH.
+- The VS Code extension requires `ril2m-agent` installed in the Python environment pointed to by `ril2m.pythonPath`. It spawns `python -m agent.lsp.server`.
