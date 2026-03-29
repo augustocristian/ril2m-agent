@@ -201,11 +201,74 @@ ril2m-agent/
 │   ├── test_scanner.py      # Scanner node tests
 │   ├── test_parser.py       # Parser node tests
 │   └── test_rag.py          # RAG helper tests
+├── vscode-extension/            # VS Code extension
+│   ├── package.json             # Extension manifest + settings
+│   ├── tsconfig.json            # TypeScript config
+│   └── src/
+│       ├── extension.ts         # Entry point, commands, activation
+│       ├── agent-client.ts      # Spawns ril2m CLI, parses JSON
+│       ├── types.ts             # Shared TypeScript types
+│       ├── suggestions-provider.ts  # Sidebar tree view
+│       ├── summary-view.ts      # Webview summary panel
+│       ├── codelens-provider.ts # Inline CodeLens above test methods
+│       ├── diagnostics.ts       # Warning diagnostics for missing annotations
+│       └── annotation-applier.ts # Applies annotations to source files
 ├── .env.example             # Environment variable template
 ├── pyproject.toml           # Project config and dependencies
 ├── CLAUDE.md                # Claude Code project context
 └── README.md                # This file
 ```
+
+## VS Code Extension
+
+The project includes a VS Code extension that provides a graphical interface for the agent.
+
+### Features
+
+- **Sidebar panel** — dedicated activity bar icon with a tree view listing all suggestions grouped by file, and a summary webview with statistics.
+- **CodeLens** — inline `Apply @AccessMode(…)` buttons above unannotated test methods in Java files.
+- **Diagnostics** — yellow warning squiggles on methods missing `@AccessMode`, with the suggestion in the message.
+- **Commands** — accessible via the Command Palette (`Ctrl+Shift+P`):
+  | Command | Description |
+  |---------|-------------|
+  | `RIL2M: Analyze Project` | Run the agent pipeline and display suggestions |
+  | `RIL2M: Apply Suggested Annotation` | Apply a single annotation to the source file |
+  | `RIL2M: Apply All Suggestions` | Apply every suggestion at once |
+  | `RIL2M: Create Pull Request` | Apply annotations and create a GitHub PR |
+  | `RIL2M: Refresh Suggestions` | Re-run the analysis |
+  | `RIL2M: Clear All Suggestions` | Clear all results |
+
+### Building the extension
+
+```bash
+cd vscode-extension
+npm install
+npm run compile          # TypeScript → JavaScript
+npm run package          # produces a .vsix file
+```
+
+### Installing
+
+```bash
+# Install the .vsix in VS Code
+code --install-extension ril2m-agent-0.1.0.vsix
+```
+
+Or during development, open the `vscode-extension/` folder in VS Code and press `F5` to launch the Extension Development Host.
+
+### Extension settings
+
+Configure via **Settings → Extensions → RIL2M Agent**:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ril2m.pythonPath` | `python` | Python interpreter with ril2m-agent installed |
+| `ril2m.agentPath` | *(empty)* | Path to ril2m-agent project (if not installed globally) |
+| `ril2m.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL |
+| `ril2m.ollamaModel` | `llama3.2` | LLM model |
+| `ril2m.ollamaEmbedModel` | `nomic-embed-text` | Embedding model |
+| `ril2m.autoAnalyze` | `false` | Auto-run analysis when opening a Maven workspace |
+| `ril2m.confidenceThreshold` | `0.5` | Minimum confidence to display a suggestion |
 
 ## Customizing Prompts
 
