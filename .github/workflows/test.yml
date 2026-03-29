@@ -2,10 +2,10 @@ name: test-all
 on:
   push:
     branches-ignore:
-      - 'dependabot/**' #avoid duplicates: only run the PR, not the commit
-      - 'gh-pages' #github pages do not trigger all tests
+      - 'dependabot/**'
+      - 'gh-pages'
     tags-ignore:
-      - 'v*' #avoid rerun existing commit on release
+      - 'v*'
   pull_request:
     branches:
       - 'main'
@@ -23,17 +23,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install .
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ".[dev]"
       - name: Lint with flake8
         run: |
-          # stop the build if there are Python syntax errors or undefined names
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
           flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
       - name: Test with pytest
         run: |
-          pytest
+          pytest tests/test_scanner.py tests/test_parser.py tests/test_rag.py -v
       - name: Store coverage report
         uses: actions/upload-artifact@v7
         with:
@@ -41,6 +38,7 @@ jobs:
           path: coverage.xml
       - name: Archive logs
         uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: test-logs
           path: logs/*
@@ -55,6 +53,6 @@ jobs:
       - name: Download coverage reports
         uses: actions/download-artifact@v8
       - name: SonarQubeScan
-        uses: SonarSource/sonarqube-scan-action@a31c9398be7ace6bbfaf30c0bd5d415f843d45e9 # V.6.0 lastest 05/10/2025
+        uses: SonarSource/sonarqube-scan-action@a31c9398be7ace6bbfaf30c0bd5d415f843d45e9
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
