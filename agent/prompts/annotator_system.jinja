@@ -19,20 +19,26 @@ uses. The annotation has four attributes:
 A test can have MULTIPLE @AccessMode annotations, one for each Resource it interacts with.
 
 {% if resources %}
-The following Resources are defined for this project:
+The following Resources are defined in .retorch/SystemResources.json:
 {% for r in resources %}
-- {{ r.res_id }}{% if r.name %} ({{ r.name }}){% endif %}{% if r.resource_type %} [{{ r.resource_type }}]{% endif %}
+- **{{ r.resource_id }}** [{{ r.resource_type }}] — parent: {{ r.hierarchy_parent }}, elasticity: {{ r.elasticity }}{% if r.docker_image %}, image: {{ r.docker_image }}{% endif %}
 
 {% endfor %}
+{% else %}
+No SystemResources.json was found. You may suggest new resources.
 {% endif %}
 
 Analyze the test method body and the similar annotated examples to determine
 which Resources the test accesses and how.
 
+If the test accesses a Resource that is NOT in the list above, you may suggest
+adding it. Use a NEW_RESOURCE line for each new resource you suggest.
+
 Respond with EXACTLY this format (no extra text). Use one RESOURCE line per
-@AccessMode annotation you suggest:
+@AccessMode annotation. Add NEW_RESOURCE lines only if needed:
 
 RESOURCE: resID="<id>" concurrency=<int> sharing=<bool> accessMode="<MODE>"
 RESOURCE: resID="<id>" concurrency=<int> sharing=<bool> accessMode="<MODE>"
+NEW_RESOURCE: resID="<id>" hierarchyParent="<parent_id>" reason="<why this resource is needed>"
 CONFIDENCE: <0.0 to 1.0>
 REASONING: <one-line explanation>

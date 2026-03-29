@@ -12,7 +12,7 @@ class AccessMode:
     """A single RETORCH @AccessMode annotation.
 
     Example:
-        @AccessMode(resID = "LoginService", concurrency = 10,
+        @AccessMode(resID = "loginservice", concurrency = 10,
                     sharing = true, accessMode = "READONLY")
     """
 
@@ -33,13 +33,93 @@ class AccessMode:
 
 
 @dataclass
-class Resource:
-    """A resource declared in the SystemResources.json file."""
+class ElasticityModel:
+    """Elasticity configuration for a RETORCH resource."""
 
-    res_id: str
+    elasticity_id: str = ""
+    elasticity: int = 1
+    elasticity_cost: float = 0.0
+
+
+@dataclass
+class Capacity:
+    """A minimal capacity requirement (memory, processor, storage, etc.)."""
+
     name: str = ""
-    resource_type: str = ""
-    extra: dict = field(default_factory=dict)
+    quantity: float = 0.0
+
+
+@dataclass
+class Resource:
+    """A resource declared in the .retorch SystemResources.json file.
+
+    Matches the real RETORCH JSON format:
+    {
+      "resourceID": "loginservice",
+      "resourceType": "LOGICAL",
+      "hierarchyParent": ["mysql"],
+      "replaceable": [],
+      "elasticityModel": { ... },
+      "minimalCapacities": [ ... ],
+      "dockerImage": "database;mysql:5.7.21"
+    }
+    """
+
+    resource_id: str = ""
+    resource_type: str = "LOGICAL"
+    hierarchy_parent: list[str] = field(default_factory=list)
+    replaceable: list[str] = field(default_factory=list)
+    elasticity_model: ElasticityModel = field(default_factory=ElasticityModel)
+    minimal_capacities: list[Capacity] = field(default_factory=list)
+    docker_image: str = ""
+
+    def to_dict(self) -> dict:
+        """Serialize to the RETORCH JSON format."""
+        return {
+            "hierarchyParent": self.hierarchy_parent,
+            "replaceable": self.replaceable,
+            "elasticityModel": {
+                "elasticityID": self.elasticity_model.elasticity_id,
+                "elasticity": self.elasticity_model.elasticity,
+                "elasticityCost": self.elasticity_model.elasticity_cost,
+            },
+            "resourceType": self.resource_type,
+            "resourceID": self.resource_id,
+            "minimalCapacities": [
+                {"name": c.name, "quantity": c.quantity}
+                for c in self.minimal_capacities
+            ],
+            "dockerImage": self.docker_image,
+        }
+
+    @staticmethod
+    def from_dict(key: str, data: dict) -> Resource:
+        """Deserialize from the RETORCH JSON format."""
+        em_raw = data.get("elasticityModel", {})
+        return Resource(
+            resource_id=data.get("resourceID", key),
+            resource_type=data.get("resourceType", "LOGICAL"),
+            hierarchy_parent=data.get("hierarchyParent", []),
+            replaceable=data.get("replaceable", []),
+            elasticity_model=ElasticityModel(
+                elasticity_id=em_raw.get("elasticityID", ""),
+                elasticity=em_raw.get("elasticity", 1),
+                elasticity_cost=em_raw.get("elasticityCost", 0.0),
+            ),
+            minimal_capacities=[
+                Capacity(name=c.get("name", ""), quantity=c.get("quantity", 0.0))
+                for c in data.get("minimalCapacities", [])
+            ],
+            docker_image=data.get("dockerImage", ""),
+        )
+
+
+@dataclass
+class NewResourceSuggestion:
+    """A suggestion to add a new resource to SystemResources.json."""
+
+    resource: Resource
+    reasoning: str = ""
 
 
 @dataclass
@@ -66,6 +146,7 @@ class AnnotationSuggestion:
 
     test_case: TestCase
     suggested_access_modes: list[AccessMode] = field(default_factory=list)
+    new_resources: list[NewResourceSuggestion] = field(default_factory=list)
     confidence: float = 0.0
     reasoning: str = ""
     similar_cases: list[TestCase] = field(default_factory=list)
@@ -86,6 +167,7 @@ class AgentState:
     # Scanner output
     test_files: Annotated[list[str], operator.add] = field(default_factory=list)
     resources: list[Resource] = field(default_factory=list)
+    resources_file_path: str = ""
 
     # Parser output
     annotated_tests: Annotated[list[TestCase], operator.add] = field(

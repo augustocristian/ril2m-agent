@@ -10,7 +10,8 @@ from git import Repo
 from github import Auth, Github
 
 from agent.config import get_settings
-from agent.state import AgentState, AnnotationSuggestion
+from agent.resources import add_resources
+from agent.state import AgentState, AnnotationSuggestion, NewResourceSuggestion
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,24 @@ def create_pr(state: AgentState) -> dict:
     for suggestion in state.suggestions:
         if _apply_annotation(suggestion):
             modified_files.append(suggestion.test_case.file_path)
+
+    # 1b. Collect and add new resources to SystemResources.json
+    all_new_resources: list[NewResourceSuggestion] = []
+    for suggestion in state.suggestions:
+        all_new_resources.extend(suggestion.new_resources)
+
+    added_resource_ids: list[str] = []
+    if all_new_resources and state.resources_file_path:
+        added_resource_ids = add_resources(
+            state.resources_file_path, all_new_resources
+        )
+        if added_resource_ids:
+            modified_files.append(state.resources_file_path)
+            logger.info(
+                "Added %d new resource(s) to %s",
+                len(added_resource_ids),
+                state.resources_file_path,
+            )
 
     if not modified_files:
         return {

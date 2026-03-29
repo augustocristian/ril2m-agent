@@ -35,6 +35,15 @@ class AccessModeSuggestion:
 
 
 @dataclass(frozen=True)
+class NewResourceResult:
+    """A suggestion to add a new resource to SystemResources.json."""
+
+    resource_id: str
+    hierarchy_parent: str
+    reasoning: str
+
+
+@dataclass(frozen=True)
 class SuggestionResult:
     """Lightweight result for LSP consumption."""
 
@@ -42,6 +51,7 @@ class SuggestionResult:
     class_name: str
     method_name: str
     suggested_access_modes: tuple[AccessModeSuggestion, ...] = ()
+    new_resources: tuple[NewResourceResult, ...] = ()
     confidence: float = 0.0
     reasoning: str = ""
 
@@ -68,6 +78,14 @@ def analyze_workspace(project_path: str) -> list[SuggestionResult]:
 
     results: list[SuggestionResult] = []
     for s in suggestions_raw:
+        new_res = tuple(
+            NewResourceResult(
+                resource_id=nr.resource.resource_id,
+                hierarchy_parent=", ".join(nr.resource.hierarchy_parent),
+                reasoning=nr.reasoning,
+            )
+            for nr in s.new_resources
+        )
         results.append(
             SuggestionResult(
                 file_path=s.test_case.file_path,
@@ -82,6 +100,7 @@ def analyze_workspace(project_path: str) -> list[SuggestionResult]:
                     )
                     for am in s.suggested_access_modes
                 ),
+                new_resources=new_res,
                 confidence=s.confidence,
                 reasoning=s.reasoning,
             )

@@ -41,7 +41,6 @@ def _find_method_range(
     if not match:
         return (0, 0, 0, 0)
 
-    # Calculate line/col from offset
     start = match.start()
     lines_before = source[:start].split("\n")
     start_line = len(lines_before) - 1
@@ -53,7 +52,6 @@ def _find_method_range(
 def _uri_to_path(uri: str) -> str:
     """Convert a file URI to a filesystem path."""
     if uri.startswith("file:///"):
-        # Windows: file:///C:/...  →  C:/...
         path = uri[8:] if uri[9] == ":" else uri[7:]
     elif uri.startswith("file://"):
         path = uri[7:]
@@ -68,6 +66,89 @@ def _path_to_uri(path: str) -> str:
     if not normalized.startswith("/"):
         normalized = "/" + normalized
     return f"file://{normalized}"
+
+
+def _insert_annotations(source: str, method_name: str, annotations_java: str) -> str:
+    """Insert annotation lines before the method's @Test annotation."""
+    if not annotations_java.strip():
+        return source
+
+    if "AccessMode" not in source:
+        last_import = 0
+        for m in re.finditer(r"^import\s+[^;]+;", source, re.MULTILINE):
+            last_import = m.end()
+        if last_import > 0:
+            source = (
+                source[:last_import]
+                + "\nimport giis.retorch.annotations.AccessMode;"
+                + source[last_import:]
+            )
+
+    pattern = re.compile(
+        rf"([ \t]*)(@(?:Test|ParameterizedTest|RepeatedTest)[^\n]*\n)"
+        rf"([ \t]*(?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(method_name)}\s*\()",
+        re.MULTILINE,
+    )
+    match = pattern.search(source)
+    if match:
+        indent = match.group(1)
+        insert_pos = match.start()
+        indented = "\n".join(
+            f"{indent}{line}" for line in annotations_java.splitlines()
+        )
+        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
+
+    pattern2 = re.compile(
+        rf"([ \t]*)((?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(method_name)}\s*\()",
+        re.MULTILINE,
+    )
+    match2 = pattern2.search(source)
+    if match2:
+        indent = match2.group(1)
+        insert_pos = match2.start()
+        indented = "\n".join(
+            f"{indent}{line}" for line in annotations_java.splitlines()
+        )
+        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
+
+    return source
+
+
+def _build_diagnostic_message(s: SuggestionResult) -> str:
+    """Build a diagnostic message including annotations and new resources."""
+    parts = [
+        f"Missing @AccessMode annotation(s).\n"
+        f"Suggested:\n{s.suggested_annotations_java}\n"
+        f"({s.confidence:.0%} confidence)\n"
+        f"{s.reasoning}"
+    ]
+    if s.new_resources:
+        nr_lines = "\n".join(
+            f"  - {nr.resource_id} (parent: {nr.hierarchy_parent}) — {nr.reasoning}"
+            for nr in s.new_resources
+        )
+        parts.append(f"\nNew resources suggested:\n{nr_lines}")
+    return "".join(parts)
+
+
+def _build_diagnostic_data(s: SuggestionResult) -> str:
+    """Build the JSON data payload for a diagnostic."""
+    data: dict = {
+        "method": s.method_name,
+        "class": s.class_name,
+        "annotations_java": s.suggested_annotations_java,
+        "file": s.file_path,
+    }
+    if s.new_resources:
+        data["new_resources"] = [
+            {
+                "resource_id": nr.resource_id,
+                "hierarchy_parent": nr.hierarchy_parent,
+                "reasoning": nr.reasoning,
+            }
+            for nr in s.new_resources
+        ]
+    return json.dumps(data)
 
 
 # ─── Publish diagnostics for a file ─────────────────────────────────
@@ -88,30 +169,17 @@ def _publish_diagnostics_for_file(uri: str) -> None:
     diagnostics: list[lsp.Diagnostic] = []
     for s in file_suggestions:
         sl, sc, el, ec = _find_method_range(source, s.method_name)
-        annotations_str = s.suggested_annotations_java
         diagnostics.append(
             lsp.Diagnostic(
                 range=lsp.Range(
                     start=lsp.Position(line=sl, character=sc),
                     end=lsp.Position(line=el, character=ec),
                 ),
-                message=(
-                    f"Missing @AccessMode annotation(s).\n"
-                    f"Suggested:\n{annotations_str}\n"
-                    f"({s.confidence:.0%} confidence)\n"
-                    f"{s.reasoning}"
-                ),
+                message=_build_diagnostic_message(s),
                 severity=lsp.DiagnosticSeverity.Warning,
                 source="ril2m",
                 code="missing-access-mode",
-                data=json.dumps(
-                    {
-                        "method": s.method_name,
-                        "class": s.class_name,
-                        "annotations_java": annotations_str,
-                        "file": s.file_path,
-                    }
-                ),
+                data=_build_diagnostic_data(s),
             )
         )
 
@@ -137,7 +205,6 @@ def cmd_analyze(ls: LanguageServer, args: list) -> str:
         ls.show_message(f"Analysis failed: {exc}", lsp.MessageType.Error)
         return json.dumps({"error": str(exc)})
 
-    # Cache and publish
     _suggestions.clear()
     for s in results:
         uri = _path_to_uri(s.file_path)
@@ -147,10 +214,11 @@ def cmd_analyze(ls: LanguageServer, args: list) -> str:
         _publish_diagnostics_for_file(uri)
 
     count = len(results)
-    ls.show_message(
-        f"RIL2M: Found {count} test(s) missing @AccessMode.",
-        lsp.MessageType.Info,
-    )
+    new_res_count = sum(len(s.new_resources) for s in results)
+    msg = f"RIL2M: Found {count} test(s) missing @AccessMode."
+    if new_res_count:
+        msg += f" {new_res_count} new resource(s) suggested."
+    ls.show_message(msg, lsp.MessageType.Info)
 
     return json.dumps(
         {
@@ -161,6 +229,14 @@ def cmd_analyze(ls: LanguageServer, args: list) -> str:
                     "method": s.method_name,
                     "file": s.file_path,
                     "annotations_java": s.suggested_annotations_java,
+                    "new_resources": [
+                        {
+                            "resource_id": nr.resource_id,
+                            "hierarchy_parent": nr.hierarchy_parent,
+                            "reasoning": nr.reasoning,
+                        }
+                        for nr in s.new_resources
+                    ],
                     "confidence": s.confidence,
                     "reasoning": s.reasoning,
                 }
@@ -196,6 +272,9 @@ def cmd_apply_suggestion(ls: LanguageServer, args: list) -> str:
 
     path.write_text(new_source, encoding="utf-8")
 
+    # Add new resources to SystemResources.json if suggested
+    added_resources = _apply_new_resources(data)
+
     # Remove from cache and refresh diagnostics
     uri = _path_to_uri(file_path)
     if uri in _suggestions:
@@ -204,13 +283,18 @@ def cmd_apply_suggestion(ls: LanguageServer, args: list) -> str:
         ]
         _publish_diagnostics_for_file(uri)
 
-    return json.dumps({"applied": True, "method": method_name})
+    result: dict = {"applied": True, "method": method_name}
+    if added_resources:
+        result["added_resources"] = added_resources
+    return json.dumps(result)
 
 
 @server.command("ril2m.applyAllSuggestions")
 def cmd_apply_all(ls: LanguageServer, args: list) -> str:
     """Apply all cached annotation suggestions."""
     applied = 0
+    all_new_resources: list[dict] = []
+
     for uri, suggestions in list(_suggestions.items()):
         file_path = _uri_to_path(uri)
         path = Path(file_path)
@@ -225,67 +309,80 @@ def cmd_apply_all(ls: LanguageServer, args: list) -> str:
             if new_source != source:
                 source = new_source
                 applied += 1
+            # Collect new resources
+            for nr in s.new_resources:
+                all_new_resources.append(
+                    {
+                        "resource_id": nr.resource_id,
+                        "hierarchy_parent": nr.hierarchy_parent,
+                        "reasoning": nr.reasoning,
+                    }
+                )
 
         path.write_text(source, encoding="utf-8")
 
+    # Add all new resources at once
+    added_resources = _apply_new_resources_bulk(all_new_resources)
+
     _suggestions.clear()
-    # Clear all diagnostics
-    for uri in list(_suggestions.keys()):
-        server.publish_diagnostics(uri, [])
 
     ls.show_message(
         f"RIL2M: Applied {applied} annotation(s).", lsp.MessageType.Info
     )
-    return json.dumps({"applied": applied})
+    result: dict = {"applied": applied}
+    if added_resources:
+        result["added_resources"] = added_resources
+    return json.dumps(result)
 
 
-def _insert_annotations(source: str, method_name: str, annotations_java: str) -> str:
-    """Insert annotation lines before the method's @Test annotation."""
-    if not annotations_java.strip():
-        return source
+def _apply_new_resources(data: dict) -> list[str]:
+    """Add new resources from a suggestion data dict to SystemResources.json.
 
-    # Ensure @AccessMode import exists
-    if "AccessMode" not in source:
-        last_import = 0
-        for m in re.finditer(r"^import\s+[^;]+;", source, re.MULTILINE):
-            last_import = m.end()
-        if last_import > 0:
-            source = (
-                source[:last_import]
-                + "\nimport giis.retorch.annotations.AccessMode;"
-                + source[last_import:]
-            )
+    Returns list of resource IDs that were added.
+    """
+    nr_list = data.get("new_resources", [])
+    if not nr_list:
+        return []
+    return _apply_new_resources_bulk(nr_list)
 
-    # Find the method
-    pattern = re.compile(
-        rf"([ \t]*)(@(?:Test|ParameterizedTest|RepeatedTest)[^\n]*\n)"
-        rf"([ \t]*(?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(method_name)}\s*\()",
-        re.MULTILINE,
-    )
-    match = pattern.search(source)
-    if match:
-        indent = match.group(1)
-        insert_pos = match.start()
-        indented = "\n".join(
-            f"{indent}{line}" for line in annotations_java.splitlines()
+
+def _apply_new_resources_bulk(nr_list: list[dict]) -> list[str]:
+    """Add a batch of new resources to SystemResources.json.
+
+    Searches the workspace for the .retorch/ resources file.
+    Returns list of resource IDs that were added.
+    """
+    if not nr_list:
+        return []
+
+    workspace_folders = server.workspace.folders
+    if not workspace_folders:
+        return []
+
+    root_path = _uri_to_path(workspace_folders[0].uri)
+
+    from agent.resources import add_resources, find_resources_file
+    from agent.state import NewResourceSuggestion
+
+    resources_file = find_resources_file(root_path)
+    if not resources_file:
+        logger.warning("No .retorch/*SystemResources.json found — cannot add resources.")
+        return []
+
+    from agent.resources import build_default_resource
+
+    suggestions = []
+    for nr in nr_list:
+        parent = nr.get("hierarchy_parent", "")
+        resource = build_default_resource(
+            resource_id=nr["resource_id"],
+            hierarchy_parent=[parent] if parent else [],
         )
-        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
-
-    # Fallback: insert directly above void methodName(
-    pattern2 = re.compile(
-        rf"([ \t]*)((?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(method_name)}\s*\()",
-        re.MULTILINE,
-    )
-    match2 = pattern2.search(source)
-    if match2:
-        indent = match2.group(1)
-        insert_pos = match2.start()
-        indented = "\n".join(
-            f"{indent}{line}" for line in annotations_java.splitlines()
+        suggestions.append(
+            NewResourceSuggestion(resource=resource, reasoning=nr.get("reasoning", ""))
         )
-        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
 
-    return source  # unchanged
+    return add_resources(str(resources_file), suggestions)
 
 
 # ─── Code Actions (Quick Fix) ───────────────────────────────────────
@@ -294,7 +391,6 @@ def _insert_annotations(source: str, method_name: str, annotations_java: str) ->
 def code_action(params: lsp.CodeActionParams) -> list[lsp.CodeAction]:
     """Provide 'Apply @AccessMode(…)' quick fixes for ril2m diagnostics."""
     actions: list[lsp.CodeAction] = []
-    uri = params.text_document.uri
 
     for diag in params.context.diagnostics:
         if diag.source != "ril2m" or diag.data is None:
@@ -303,9 +399,13 @@ def code_action(params: lsp.CodeActionParams) -> list[lsp.CodeAction]:
         data = json.loads(diag.data) if isinstance(diag.data, str) else diag.data
 
         num_annotations = data.get("annotations_java", "").count("@AccessMode")
+        title = f"Apply {num_annotations} @AccessMode annotation(s) to {data['method']}"
+        if data.get("new_resources"):
+            title += f" (+{len(data['new_resources'])} new resource(s))"
+
         actions.append(
             lsp.CodeAction(
-                title=f"Apply {num_annotations} @AccessMode annotation(s) to {data['method']}",
+                title=title,
                 kind=lsp.CodeActionKind.QuickFix,
                 diagnostics=[diag],
                 command=lsp.Command(
@@ -343,22 +443,20 @@ def code_lens(params: lsp.CodeLensParams) -> list[lsp.CodeLens]:
             end=lsp.Position(line=el, character=ec),
         )
 
-        # "Apply" lens
         annotations_java = s.suggested_annotations_java
         num_am = len(s.suggested_access_modes)
-        data = json.dumps(
-            {
-                "method": s.method_name,
-                "class": s.class_name,
-                "annotations_java": annotations_java,
-                "file": s.file_path,
-            }
-        )
+        data = _build_diagnostic_data(s)
+
+        # "Apply" lens
+        apply_title = f"Apply {num_am} @AccessMode annotation(s)"
+        if s.new_resources:
+            apply_title += f" (+{len(s.new_resources)} new resource(s))"
+
         lenses.append(
             lsp.CodeLens(
                 range=range_,
                 command=lsp.Command(
-                    title=f"Apply {num_am} @AccessMode annotation(s)",
+                    title=apply_title,
                     command="ril2m.applySuggestion",
                     arguments=[data],
                 ),

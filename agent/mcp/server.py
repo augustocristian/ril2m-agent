@@ -24,6 +24,43 @@ mcp = FastMCP(
 )
 
 
+def _extract_result(result: object, attr: str, default=None):
+    """Extract a value from a LangGraph result (dict or dataclass)."""
+    if isinstance(result, dict):
+        return result.get(attr, default)
+    return getattr(result, attr, default)
+
+
+def _format_suggestion(s) -> dict:
+    """Format a single AnnotationSuggestion for JSON output."""
+    suggestion: dict = {
+        "class": s.test_case.class_name,
+        "method": s.test_case.method_name,
+        "file": s.test_case.file_path,
+        "suggested_access_modes": [
+            {
+                "resID": am.res_id,
+                "concurrency": am.concurrency,
+                "sharing": am.sharing,
+                "accessMode": am.access_mode,
+            }
+            for am in s.suggested_access_modes
+        ],
+        "confidence": s.confidence,
+        "reasoning": s.reasoning,
+    }
+    if s.new_resources:
+        suggestion["new_resources"] = [
+            {
+                "resource_id": nr.resource.resource_id,
+                "hierarchy_parent": nr.resource.hierarchy_parent,
+                "reasoning": nr.reasoning,
+            }
+            for nr in s.new_resources
+        ]
+    return suggestion
+
+
 @mcp.tool()
 def analyze_project(project_path: str) -> str:
     """Scan a Java Maven project, find test cases without @AccessMode
@@ -39,23 +76,8 @@ def analyze_project(project_path: str) -> str:
     initial_state = AgentState(project_path=project_path, create_pr=False)
     result = graph.invoke(initial_state)
 
-    suggestions = []
-    raw = result.get("suggestions", []) if isinstance(result, dict) else result.suggestions
-    for s in raw:
-        suggestions.append(
-            {
-                "class": s.test_case.class_name,
-                "method": s.test_case.method_name,
-                "file": s.test_case.file_path,
-                "suggested_access_modes": [
-                    {"resID": am.res_id, "concurrency": am.concurrency,
-                     "sharing": am.sharing, "accessMode": am.access_mode}
-                    for am in s.suggested_access_modes
-                ],
-                "confidence": s.confidence,
-                "reasoning": s.reasoning,
-            }
-        )
+    raw = _extract_result(result, "suggestions", [])
+    suggestions = [_format_suggestion(s) for s in raw]
 
     return json.dumps({"suggestions": suggestions, "count": len(suggestions)}, indent=2)
 
@@ -77,20 +99,10 @@ def analyze_and_create_pr(project_path: str) -> str:
     initial_state = AgentState(project_path=project_path, create_pr=True)
     result = graph.invoke(initial_state)
 
-    pr_url = result.get("pr_url", "") if isinstance(result, dict) else result.pr_url
-    errors = result.get("errors", []) if isinstance(result, dict) else result.errors
-
-    suggestions = []
-    raw2 = result.get("suggestions", []) if isinstance(result, dict) else result.suggestions
-    for s in raw2:
-        suggestions.append(
-            {
-                "class": s.test_case.class_name,
-                "method": s.test_case.method_name,
-                "suggested_annotations_java": s.suggested_annotations_java,
-                "confidence": s.confidence,
-            }
-        )
+    pr_url = _extract_result(result, "pr_url", "")
+    errors = _extract_result(result, "errors", [])
+    raw = _extract_result(result, "suggestions", [])
+    suggestions = [_format_suggestion(s) for s in raw]
 
     return json.dumps(
         {
@@ -134,7 +146,6 @@ def list_unannotated_tests(project_path: str) -> str:
                 "class": tc.class_name,
                 "method": tc.method_name,
                 "file": tc.file_path,
-                "annotations": tc.annotations,
             }
         )
 

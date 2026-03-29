@@ -21,11 +21,34 @@ class TestScanner:
 
         resources = result.get("resources", [])
         assert len(resources) == 4
-        res_ids = [r.res_id for r in resources]
-        assert "LoginService" in res_ids
-        assert "OpenVidu" in res_ids
-        assert "Course" in res_ids
-        assert "Database" in res_ids
+        res_ids = [r.resource_id for r in resources]
+        assert "loginservice" in res_ids
+        assert "openvidu" in res_ids
+        assert "course" in res_ids
+        assert "mysql" in res_ids
+
+    def test_scan_resources_have_correct_structure(self, maven_project):
+        state = AgentState(project_path=str(maven_project))
+        result = scan_project(state)
+
+        resources = {r.resource_id: r for r in result.get("resources", [])}
+
+        login = resources["loginservice"]
+        assert login.resource_type == "LOGICAL"
+        assert login.hierarchy_parent == ["mysql"]
+        assert login.elasticity_model.elasticity == 5
+        assert login.docker_image == "codeurjc/full-teaching_no-services-openvidu:latest"
+
+        openvidu = resources["openvidu"]
+        assert openvidu.resource_type == "PHYSICAL"
+        assert openvidu.hierarchy_parent == []
+
+    def test_scan_returns_resources_file_path(self, maven_project):
+        state = AgentState(project_path=str(maven_project))
+        result = scan_project(state)
+
+        assert result.get("resources_file_path", "")
+        assert "ExampleSystemResources.json" in result["resources_file_path"]
 
     def test_scan_empty_project(self, empty_project):
         state = AgentState(project_path=str(empty_project))

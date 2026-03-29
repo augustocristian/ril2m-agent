@@ -30,6 +30,13 @@ def _configure_logging(level: str) -> None:
     )
 
 
+def _extract_result(result: object, attr: str, default=None):
+    """Extract a value from a LangGraph result (dict or dataclass)."""
+    if isinstance(result, dict):
+        return result.get(attr, default)
+    return getattr(result, attr, default)
+
+
 @app.command()
 def analyze(
     project_path: str = typer.Argument(
@@ -64,10 +71,9 @@ def analyze(
     with console.status("[bold green]Running agent pipeline…"):
         result = graph.invoke(initial_state)
 
-    # Extract results
-    suggestions = result.suggestions if hasattr(result, "suggestions") else result.get("suggestions", [])
-    errors = result.errors if hasattr(result, "errors") else result.get("errors", [])
-    pr_url = result.pr_url if hasattr(result, "pr_url") else result.get("pr_url", "")
+    suggestions = _extract_result(result, "suggestions", [])
+    errors = _extract_result(result, "errors", [])
+    pr_url = _extract_result(result, "pr_url", "")
 
     if errors:
         for err in errors:
@@ -89,6 +95,14 @@ def analyze(
                         }
                         for am in s.suggested_access_modes
                     ],
+                    "new_resources": [
+                        {
+                            "resource_id": nr.resource.resource_id,
+                            "hierarchy_parent": nr.resource.hierarchy_parent,
+                            "reasoning": nr.reasoning,
+                        }
+                        for nr in s.new_resources
+                    ],
                     "confidence": s.confidence,
                     "reasoning": s.reasoning,
                 }
@@ -104,7 +118,7 @@ def analyze(
         console.print("[green]All test methods already have @AccessMode annotations.[/green]")
         return
 
-    # Rich table output
+    # Rich table output — annotations
     table = Table(title="RETORCH @AccessMode Annotation Suggestions")
     table.add_column("Class", style="cyan")
     table.add_column("Method", style="magenta")
@@ -123,6 +137,23 @@ def analyze(
         )
 
     console.print(table)
+
+    # New resources table (if any)
+    all_new = [nr for s in suggestions for nr in s.new_resources]
+    if all_new:
+        nr_table = Table(title="New Resource Suggestions")
+        nr_table.add_column("Resource ID", style="cyan")
+        nr_table.add_column("Parent", style="magenta")
+        nr_table.add_column("Reasoning")
+
+        for nr in all_new:
+            nr_table.add_row(
+                nr.resource.resource_id,
+                ", ".join(nr.resource.hierarchy_parent) or "(root)",
+                nr.reasoning,
+            )
+
+        console.print(nr_table)
 
     if pr_url:
         console.print(f"\n[bold green]PR created:[/bold green] {pr_url}")
