@@ -1,8 +1,8 @@
 # RIL2M Agent
 
-**LangGraph + MCP agent that suggests `@AccessMode` annotations for Java Maven test cases using RAG and Ollama.**
+**LangGraph + MCP agent that suggests [RETORCH](https://giis-uniovi.github.io/retorch/) `@AccessMode` annotations for Java Maven test cases using RAG and Ollama.**
 
-The agent scans Java Maven projects, identifies test methods missing `@AccessMode` annotations, uses a RAG pipeline (Ollama embeddings + ChromaDB) to find similar already-annotated tests, and prompts an LLM to suggest the correct annotation. It can also create a GitHub Pull Request with the changes applied.
+The agent scans Java Maven projects, identifies test methods missing `@AccessMode` annotations, parses the project's `SystemResources.json` to know available resources, uses a RAG pipeline (Ollama embeddings + ChromaDB) to find similar already-annotated tests, and prompts an LLM to suggest the correct annotations (including `resID`, `concurrency`, `sharing`, and `accessMode` attributes). Each test can receive multiple `@AccessMode` annotations, one per resource. The agent can also create a GitHub Pull Request with the changes applied.
 
 ## Architecture
 
@@ -295,22 +295,39 @@ rendered = template.render(variable="value")
 
 ## How It Works
 
-### @AccessMode Annotation
+### RETORCH @AccessMode Annotation
 
-`@AccessMode` is a Java annotation used in test methods to declare the database access mode required by the test:
+The [RETORCH](https://giis-uniovi.github.io/retorch/) framework uses `@AccessMode` annotations to declare which **Resources** a test case accesses and how. Each test method can have **multiple** `@AccessMode` annotations, one per Resource:
 
-| Value | Meaning |
-|-------|---------|
-| `READONLY` | Test only reads data (SELECT queries) |
-| `READWRITE` | Test reads and writes data (SELECT + INSERT/UPDATE/DELETE) |
-| `WRITEONLY` | Test only writes data |
-| `NOACCESS` | Test does not access the database |
+```java
+@AccessMode(resID = "LoginService", concurrency = 10, sharing = true, accessMode = "READONLY")
+@AccessMode(resID = "OpenVidu", concurrency = 10, sharing = true, accessMode = "NOACCESS")
+@AccessMode(resID = "Course", concurrency = 1, sharing = false, accessMode = "READWRITE")
+@ParameterizedTest
+@MethodSource("data")
+void forumNewEntryTest(String usermail, String password, String role) { ... }
+```
+
+#### Annotation attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `resID` | String | Resource identifier (must match a resource in `<SUT>SystemResources.json`) |
+| `concurrency` | int | Upper bound of test cases that can access the resource concurrently |
+| `sharing` | boolean | Whether the resource can be shared between multiple test cases |
+| `accessMode` | String | Access type: `READONLY`, `READWRITE`, `WRITEONLY`, or `NOACCESS` |
+
+#### SystemResources.json
+
+Resources are declared in a `<SUT_NAME>SystemResources.json` file (typically under `src/test/resources`). The agent parses this file automatically to know what resources exist in the project and passes them to the LLM prompt.
 
 ### RAG Pipeline
 
-1. Annotated test methods are embedded **without** their `@AccessMode` annotation — so the vector store captures code semantics, not the annotation text.
-2. For each non-annotated test, the top-*k* most similar annotated tests are retrieved.
-3. The LLM receives the similar examples (with their annotations) plus the target method and produces a structured suggestion.
+1. **Scan** — Finds test files and parses `SystemResources.json` for available resources.
+2. **Parse** — Extracts test methods, parses their full `@AccessMode` annotations (all attributes), classifies as annotated/non-annotated.
+3. **Index** — Annotated test method bodies (without annotations) are embedded into ChromaDB so retrieval is based on code semantics.
+4. **Retrieve** — For each non-annotated test, the top-*k* most similar annotated tests are retrieved from the vector store.
+5. **Suggest** — The LLM receives the similar examples (with their full RETORCH annotations), the list of available resources, and the target method. It produces a structured suggestion with one or more `@AccessMode` annotations.
 
 This few-shot retrieval approach allows the LLM to learn the project's annotation conventions from real examples rather than relying solely on its general training data.
 

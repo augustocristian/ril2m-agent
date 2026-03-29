@@ -2,8 +2,12 @@
 
 ## What is this project?
 
-A LangGraph + MCP agent that suggests `@AccessMode` annotations for Java Maven test cases.
+A LangGraph + MCP agent that suggests **RETORCH** `@AccessMode` annotations for Java Maven test cases.
 It uses Ollama (local LLM + embeddings), ChromaDB for vector storage, and can create GitHub PRs.
+
+RETORCH `@AccessMode` annotations have 4 attributes: `resID`, `concurrency`, `sharing`, `accessMode`.
+A test can have **multiple** `@AccessMode` annotations (one per Resource it accesses).
+Resources are declared in `<SUT_NAME>SystemResources.json` files (parsed by the scanner).
 
 ## Tech stack
 
@@ -57,8 +61,10 @@ vscode-extension/   # VS Code extension (thin JS shim — NO TypeScript)
 - Each node function takes `AgentState` and returns a `dict` of state updates.
 - Config comes from `.env` via `pydantic-settings` (`agent.config.get_settings()`).
 - **Prompts are Jinja2 templates** in `agent/prompts/*.jinja`, loaded via `agent.prompts.load_prompt()`. The annotator renders them at runtime — edit the `.jinja` files to tweak LLM behavior without touching Python code.
-- The parser uses **regex** (not a full Java AST) to extract test methods — simpler but handles standard patterns.
-- The RAG corpus stores annotated test bodies **without** the `@AccessMode` annotation so retrieval is based on code semantics.
+- **AccessMode is a dataclass** with `res_id`, `concurrency`, `sharing`, `access_mode`. A `TestCase` has a `list[AccessMode]` (zero or more). `AnnotationSuggestion` has `suggested_access_modes: list[AccessMode]`.
+- The parser uses **regex** (not a full Java AST) to extract test methods and parse all `@AccessMode(resID=..., concurrency=..., sharing=..., accessMode=...)` attributes.
+- The scanner also parses `*SystemResources.json` files to discover available resources, which are passed to the LLM prompt.
+- The RAG corpus stores annotated test bodies **without** the `@AccessMode` annotations so retrieval is based on code semantics.
 
 ## Running locally
 

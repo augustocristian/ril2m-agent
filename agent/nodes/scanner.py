@@ -1,11 +1,12 @@
-"""Scanner node – finds Java test files in Maven projects."""
+"""Scanner node – finds Java test files and SystemResources.json in Maven projects."""
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
-from agent.state import AgentState
+from agent.state import AgentState, Resource
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,42 @@ def _find_test_files(project_root: Path) -> list[str]:
     return test_files
 
 
+def _find_system_resources(project_root: Path) -> list[Resource]:
+    """Find and parse *SystemResources.json files in the project.
+
+    The file is typically named <SUT_NAME>SystemResources.json and lives
+    somewhere under the project root (often src/test/resources).
+    """
+    resources: list[Resource] = []
+
+    for json_file in project_root.rglob("*SystemResources.json"):
+        logger.info("Found SystemResources file: %s", json_file)
+        try:
+            data = json.loads(json_file.read_text(encoding="utf-8"))
+            # The file can be a list of resources or a dict with a resources key
+            resource_list = data if isinstance(data, list) else data.get("resources", [])
+            for entry in resource_list:
+                if isinstance(entry, dict):
+                    resources.append(
+                        Resource(
+                            res_id=entry.get("resID", entry.get("id", "")),
+                            name=entry.get("name", ""),
+                            resource_type=entry.get("type", entry.get("resourceType", "")),
+                            extra={
+                                k: v
+                                for k, v in entry.items()
+                                if k not in ("resID", "id", "name", "type", "resourceType")
+                            },
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Failed to parse %s: %s", json_file, exc)
+
+    return resources
+
+
 def scan_project(state: AgentState) -> dict:
-    """Scan *state.project_path* for Java test files.
+    """Scan *state.project_path* for Java test files and SystemResources.
 
     If the path points directly to a Maven project its test directory is
     scanned.  If the path contains multiple Maven modules (multi-module
@@ -48,14 +83,17 @@ def scan_project(state: AgentState) -> dict:
         }
 
     test_files: list[str] = []
+    resources: list[Resource] = []
 
     if _is_maven_project(root):
         test_files.extend(_find_test_files(root))
+        resources.extend(_find_system_resources(root))
 
     # Also look one level deep for multi-module projects
     for child in root.iterdir():
         if child.is_dir() and _is_maven_project(child):
             test_files.extend(_find_test_files(child))
+            resources.extend(_find_system_resources(child))
 
     if not test_files:
         return {
@@ -63,5 +101,9 @@ def scan_project(state: AgentState) -> dict:
             "current_step": "scan_failed",
         }
 
-    logger.info("Found %d test file(s)", len(test_files))
-    return {"test_files": test_files, "current_step": "scanned"}
+    logger.info("Found %d test file(s), %d resource(s)", len(test_files), len(resources))
+    return {
+        "test_files": test_files,
+        "resources": resources,
+        "current_step": "scanned",
+    }

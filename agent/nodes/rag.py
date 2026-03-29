@@ -3,6 +3,7 @@ similar cases for non-annotated ones using Ollama embeddings + ChromaDB."""
 
 from __future__ import annotations
 
+import json
 import logging
 
 from langchain_chroma import Chroma
@@ -22,19 +23,31 @@ _vectorstore: Chroma | None = None
 def _test_to_document(tc: TestCase) -> Document:
     """Convert an annotated TestCase into a LangChain Document.
 
-    The page_content is the method body **without** the @AccessMode annotation
-    so that retrieval is based on code semantics, not on the annotation itself.
+    The page_content is the method body **without** the @AccessMode annotations
+    so that retrieval is based on code semantics, not on the annotations themselves.
     """
-    # Strip @AccessMode from the body text used for embedding
-    body_for_embed = tc.method_body
+    # Serialize the access modes as JSON for metadata
+    access_modes_json = json.dumps(
+        [
+            {
+                "resID": am.res_id,
+                "concurrency": am.concurrency,
+                "sharing": am.sharing,
+                "accessMode": am.access_mode,
+            }
+            for am in tc.access_modes
+        ]
+    )
+
     metadata = {
         "file_path": tc.file_path,
         "class_name": tc.class_name,
         "method_name": tc.method_name,
-        "access_mode": tc.access_mode_value or "",
-        "annotations": "|".join(tc.annotations),
+        "access_modes_json": access_modes_json,
+        "access_modes_java": tc.access_modes_java,
+        "num_access_modes": len(tc.access_modes),
     }
-    return Document(page_content=body_for_embed, metadata=metadata)
+    return Document(page_content=tc.method_body, metadata=metadata)
 
 
 def _get_vectorstore(force_rebuild: bool = False) -> Chroma:

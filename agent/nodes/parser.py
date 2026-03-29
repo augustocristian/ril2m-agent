@@ -1,4 +1,4 @@
-"""Parser node – extracts test methods and classifies them by @AccessMode."""
+"""Parser node – extracts test methods and classifies them by RETORCH @AccessMode."""
 
 from __future__ import annotations
 
@@ -6,27 +6,30 @@ import logging
 import re
 from pathlib import Path
 
-from agent.state import AgentState, TestCase
+from agent.state import AccessMode, AgentState, TestCase
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Regex-based Java parser (avoids hard dependency on full Java AST parsing)
+# Regex patterns for RETORCH @AccessMode annotations
 # ---------------------------------------------------------------------------
 
-# Matches @AccessMode("VALUE") or @AccessMode(value = "VALUE") etc.
+# Matches a single @AccessMode(...) with named attributes.
+# Captures the full parenthesised content so we can parse attributes from it.
 _ACCESS_MODE_RE = re.compile(
-    r'@AccessMode\s*\(\s*(?:value\s*=\s*)?["\']?(\w+)["\']?\s*\)',
+    r"@AccessMode\s*\(([^)]+)\)",
 )
 
-# Matches any annotation line
-_ANNOTATION_RE = re.compile(r"^\s*@(\w+(?:\([^)]*\))?)", re.MULTILINE)
+# Attribute extractors inside an @AccessMode(...)
+_ATTR_RESID = re.compile(r'resID\s*=\s*"([^"]+)"')
+_ATTR_CONCURRENCY = re.compile(r"concurrency\s*=\s*(\d+)")
+_ATTR_SHARING = re.compile(r"sharing\s*=\s*(true|false)", re.IGNORECASE)
+_ATTR_ACCESSMODE = re.compile(r'accessMode\s*=\s*"([^"]+)"')
 
-# Matches a test method: annotations block + method signature + body
-# Captures: everything from the first annotation before the method to the
-# closing brace. Handles @Test, @ParameterizedTest, etc.
+# Matches a test method: annotations block + method signature + opening brace.
+# The annotation block is everything from the first @ line preceding the method.
 _TEST_METHOD_RE = re.compile(
-    r"((?:^\s*@\w+(?:\([^)]*\))?\s*\n)+)"  # annotation block
+    r"((?:^\s*@\w+(?:\([^)]*\))?\s*\n)+)"  # annotation block (one or more)
     r"\s*(?:public\s+|protected\s+|private\s+)?"  # optional visibility
     r"(?:static\s+)?void\s+"  # return type
     r"(\w+)"  # method name
@@ -36,10 +39,26 @@ _TEST_METHOD_RE = re.compile(
     re.MULTILINE,
 )
 
-# Matches a class declaration to extract the class name
-_CLASS_RE = re.compile(
-    r"(?:public\s+)?class\s+(\w+)",
-)
+# Matches a class declaration
+_CLASS_RE = re.compile(r"(?:public\s+)?class\s+(\w+)")
+
+
+def _parse_access_mode(attr_text: str) -> AccessMode | None:
+    """Parse the attributes inside a single @AccessMode(...) annotation."""
+    res_id_m = _ATTR_RESID.search(attr_text)
+    concurrency_m = _ATTR_CONCURRENCY.search(attr_text)
+    sharing_m = _ATTR_SHARING.search(attr_text)
+    access_mode_m = _ATTR_ACCESSMODE.search(attr_text)
+
+    if not res_id_m or not access_mode_m:
+        return None
+
+    return AccessMode(
+        res_id=res_id_m.group(1),
+        concurrency=int(concurrency_m.group(1)) if concurrency_m else 1,
+        sharing=sharing_m.group(1).lower() == "true" if sharing_m else True,
+        access_mode=access_mode_m.group(1),
+    )
 
 
 def _extract_method_body(source: str, method_start: int) -> str:
@@ -62,7 +81,6 @@ def _parse_java_file(file_path: str) -> tuple[list[TestCase], list[TestCase]]:
     """Parse a single Java file, returning (annotated, non_annotated) test cases."""
     source = Path(file_path).read_text(encoding="utf-8", errors="replace")
 
-    # Find the class name
     class_match = _CLASS_RE.search(source)
     class_name = class_match.group(1) if class_match else "UnknownClass"
 
@@ -73,13 +91,14 @@ def _parse_java_file(file_path: str) -> tuple[list[TestCase], list[TestCase]]:
         annotations_block = match.group(1)
         method_name = match.group(2)
 
-        # Check this is actually a test method (has @Test or similar)
+        # Collect all annotation lines
         ann_lines = [
             line.strip()
             for line in annotations_block.strip().splitlines()
             if line.strip().startswith("@")
         ]
 
+        # Check this is actually a test method
         is_test = any(
             a.startswith("@Test")
             or a.startswith("@ParameterizedTest")
@@ -91,11 +110,14 @@ def _parse_java_file(file_path: str) -> tuple[list[TestCase], list[TestCase]]:
 
         body = _extract_method_body(source, match.start())
 
-        access_mode_match = _ACCESS_MODE_RE.search(annotations_block)
-        has_access_mode = access_mode_match is not None
-        access_mode_value = (
-            access_mode_match.group(1) if access_mode_match else None
-        )
+        # Parse all @AccessMode annotations
+        access_modes: list[AccessMode] = []
+        for am_match in _ACCESS_MODE_RE.finditer(annotations_block):
+            am = _parse_access_mode(am_match.group(1))
+            if am:
+                access_modes.append(am)
+
+        has_access_mode = len(access_modes) > 0
 
         tc = TestCase(
             file_path=file_path,
@@ -103,8 +125,8 @@ def _parse_java_file(file_path: str) -> tuple[list[TestCase], list[TestCase]]:
             method_name=method_name,
             method_body=body,
             annotations=ann_lines,
+            access_modes=access_modes,
             has_access_mode=has_access_mode,
-            access_mode_value=access_mode_value,
         )
 
         if has_access_mode:

@@ -40,13 +40,18 @@ def analyze_project(project_path: str) -> str:
     result = graph.invoke(initial_state)
 
     suggestions = []
-    for s in result.get("suggestions", []) if isinstance(result, dict) else result.suggestions:
+    raw = result.get("suggestions", []) if isinstance(result, dict) else result.suggestions
+    for s in raw:
         suggestions.append(
             {
                 "class": s.test_case.class_name,
                 "method": s.test_case.method_name,
                 "file": s.test_case.file_path,
-                "suggested_annotation": s.suggested_annotation,
+                "suggested_access_modes": [
+                    {"resID": am.res_id, "concurrency": am.concurrency,
+                     "sharing": am.sharing, "accessMode": am.access_mode}
+                    for am in s.suggested_access_modes
+                ],
                 "confidence": s.confidence,
                 "reasoning": s.reasoning,
             }
@@ -76,12 +81,13 @@ def analyze_and_create_pr(project_path: str) -> str:
     errors = result.get("errors", []) if isinstance(result, dict) else result.errors
 
     suggestions = []
-    for s in result.get("suggestions", []) if isinstance(result, dict) else result.suggestions:
+    raw2 = result.get("suggestions", []) if isinstance(result, dict) else result.suggestions
+    for s in raw2:
         suggestions.append(
             {
                 "class": s.test_case.class_name,
                 "method": s.test_case.method_name,
-                "suggested_annotation": s.suggested_annotation,
+                "suggested_annotations_java": s.suggested_annotations_java,
                 "confidence": s.confidence,
             }
         )

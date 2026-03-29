@@ -88,6 +88,7 @@ def _publish_diagnostics_for_file(uri: str) -> None:
     diagnostics: list[lsp.Diagnostic] = []
     for s in file_suggestions:
         sl, sc, el, ec = _find_method_range(source, s.method_name)
+        annotations_str = s.suggested_annotations_java
         diagnostics.append(
             lsp.Diagnostic(
                 range=lsp.Range(
@@ -95,19 +96,19 @@ def _publish_diagnostics_for_file(uri: str) -> None:
                     end=lsp.Position(line=el, character=ec),
                 ),
                 message=(
-                    f"Missing @AccessMode annotation.\n"
-                    f"Suggested: {s.suggested_annotation} "
+                    f"Missing @AccessMode annotation(s).\n"
+                    f"Suggested:\n{annotations_str}\n"
                     f"({s.confidence:.0%} confidence)\n"
                     f"{s.reasoning}"
                 ),
                 severity=lsp.DiagnosticSeverity.Warning,
                 source="ril2m",
-                code=s.suggested_annotation,
+                code="missing-access-mode",
                 data=json.dumps(
                     {
                         "method": s.method_name,
                         "class": s.class_name,
-                        "annotation": s.suggested_annotation,
+                        "annotations_java": annotations_str,
                         "file": s.file_path,
                     }
                 ),
@@ -159,7 +160,7 @@ def cmd_analyze(ls: LanguageServer, args: list) -> str:
                     "class": s.class_name,
                     "method": s.method_name,
                     "file": s.file_path,
-                    "annotation": s.suggested_annotation,
+                    "annotations_java": s.suggested_annotations_java,
                     "confidence": s.confidence,
                     "reasoning": s.reasoning,
                 }
@@ -177,10 +178,10 @@ def cmd_apply_suggestion(ls: LanguageServer, args: list) -> str:
 
     data = json.loads(args[0]) if isinstance(args[0], str) else args[0]
     method_name = data.get("method", "")
-    annotation = data.get("annotation", "")
+    annotations_java = data.get("annotations_java", "")
     file_path = data.get("file", "")
 
-    if not all([method_name, annotation, file_path]):
+    if not all([method_name, annotations_java, file_path]):
         return json.dumps({"error": "missing fields"})
 
     path = Path(file_path)
@@ -188,7 +189,7 @@ def cmd_apply_suggestion(ls: LanguageServer, args: list) -> str:
         return json.dumps({"error": f"file not found: {file_path}"})
 
     source = path.read_text(encoding="utf-8")
-    new_source = _insert_annotation(source, method_name, annotation)
+    new_source = _insert_annotations(source, method_name, annotations_java)
 
     if new_source == source:
         return json.dumps({"error": "could not locate method"})
@@ -218,7 +219,9 @@ def cmd_apply_all(ls: LanguageServer, args: list) -> str:
 
         source = path.read_text(encoding="utf-8")
         for s in suggestions:
-            new_source = _insert_annotation(source, s.method_name, s.suggested_annotation)
+            new_source = _insert_annotations(
+                source, s.method_name, s.suggested_annotations_java
+            )
             if new_source != source:
                 source = new_source
                 applied += 1
@@ -236,8 +239,11 @@ def cmd_apply_all(ls: LanguageServer, args: list) -> str:
     return json.dumps({"applied": applied})
 
 
-def _insert_annotation(source: str, method_name: str, annotation: str) -> str:
-    """Insert an annotation line before the method's @Test annotation."""
+def _insert_annotations(source: str, method_name: str, annotations_java: str) -> str:
+    """Insert annotation lines before the method's @Test annotation."""
+    if not annotations_java.strip():
+        return source
+
     # Ensure @AccessMode import exists
     if "AccessMode" not in source:
         last_import = 0
@@ -246,13 +252,13 @@ def _insert_annotation(source: str, method_name: str, annotation: str) -> str:
         if last_import > 0:
             source = (
                 source[:last_import]
-                + "\nimport giis.visualassert.portable.AccessMode;"
+                + "\nimport giis.retorch.annotations.AccessMode;"
                 + source[last_import:]
             )
 
     # Find the method
     pattern = re.compile(
-        rf"([ \t]*)(@Test[^\n]*\n)"
+        rf"([ \t]*)(@(?:Test|ParameterizedTest|RepeatedTest)[^\n]*\n)"
         rf"([ \t]*(?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(method_name)}\s*\()",
         re.MULTILINE,
     )
@@ -260,11 +266,10 @@ def _insert_annotation(source: str, method_name: str, annotation: str) -> str:
     if match:
         indent = match.group(1)
         insert_pos = match.start()
-        return (
-            source[:insert_pos]
-            + f"{indent}{annotation}\n"
-            + source[insert_pos:]
+        indented = "\n".join(
+            f"{indent}{line}" for line in annotations_java.splitlines()
         )
+        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
 
     # Fallback: insert directly above void methodName(
     pattern2 = re.compile(
@@ -275,11 +280,10 @@ def _insert_annotation(source: str, method_name: str, annotation: str) -> str:
     if match2:
         indent = match2.group(1)
         insert_pos = match2.start()
-        return (
-            source[:insert_pos]
-            + f"{indent}{annotation}\n"
-            + source[insert_pos:]
+        indented = "\n".join(
+            f"{indent}{line}" for line in annotations_java.splitlines()
         )
+        return source[:insert_pos] + indented + "\n" + source[insert_pos:]
 
     return source  # unchanged
 
@@ -298,13 +302,14 @@ def code_action(params: lsp.CodeActionParams) -> list[lsp.CodeAction]:
 
         data = json.loads(diag.data) if isinstance(diag.data, str) else diag.data
 
+        num_annotations = data.get("annotations_java", "").count("@AccessMode")
         actions.append(
             lsp.CodeAction(
-                title=f"Apply {data['annotation']} to {data['method']}",
+                title=f"Apply {num_annotations} @AccessMode annotation(s) to {data['method']}",
                 kind=lsp.CodeActionKind.QuickFix,
                 diagnostics=[diag],
                 command=lsp.Command(
-                    title="Apply annotation",
+                    title="Apply annotations",
                     command="ril2m.applySuggestion",
                     arguments=[json.dumps(data)],
                 ),
@@ -339,11 +344,13 @@ def code_lens(params: lsp.CodeLensParams) -> list[lsp.CodeLens]:
         )
 
         # "Apply" lens
+        annotations_java = s.suggested_annotations_java
+        num_am = len(s.suggested_access_modes)
         data = json.dumps(
             {
                 "method": s.method_name,
                 "class": s.class_name,
-                "annotation": s.suggested_annotation,
+                "annotations_java": annotations_java,
                 "file": s.file_path,
             }
         )
@@ -351,7 +358,7 @@ def code_lens(params: lsp.CodeLensParams) -> list[lsp.CodeLens]:
             lsp.CodeLens(
                 range=range_,
                 command=lsp.Command(
-                    title=f"Apply {s.suggested_annotation}",
+                    title=f"Apply {num_am} @AccessMode annotation(s)",
                     command="ril2m.applySuggestion",
                     arguments=[data],
                 ),

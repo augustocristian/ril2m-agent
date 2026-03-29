@@ -8,6 +8,41 @@ from typing import Annotated
 
 
 @dataclass
+class AccessMode:
+    """A single RETORCH @AccessMode annotation.
+
+    Example:
+        @AccessMode(resID = "LoginService", concurrency = 10,
+                    sharing = true, accessMode = "READONLY")
+    """
+
+    res_id: str
+    concurrency: int
+    sharing: bool
+    access_mode: str  # READONLY | READWRITE | WRITEONLY | NOACCESS
+
+    def to_java(self) -> str:
+        """Render back to Java annotation syntax."""
+        sharing_str = "true" if self.sharing else "false"
+        return (
+            f'@AccessMode(resID = "{self.res_id}", '
+            f"concurrency = {self.concurrency}, "
+            f"sharing = {sharing_str}, "
+            f'accessMode = "{self.access_mode}")'
+        )
+
+
+@dataclass
+class Resource:
+    """A resource declared in the SystemResources.json file."""
+
+    res_id: str
+    name: str = ""
+    resource_type: str = ""
+    extra: dict = field(default_factory=dict)
+
+
+@dataclass
 class TestCase:
     """Represents a single Java test method."""
 
@@ -16,19 +51,29 @@ class TestCase:
     method_name: str
     method_body: str
     annotations: list[str] = field(default_factory=list)
+    access_modes: list[AccessMode] = field(default_factory=list)
     has_access_mode: bool = False
-    access_mode_value: str | None = None
+
+    @property
+    def access_modes_java(self) -> str:
+        """Return all @AccessMode annotations as Java source lines."""
+        return "\n".join(am.to_java() for am in self.access_modes)
 
 
 @dataclass
 class AnnotationSuggestion:
-    """A suggested @AccessMode annotation for a test case."""
+    """Suggested @AccessMode annotations for a test case."""
 
     test_case: TestCase
-    suggested_annotation: str
-    confidence: float
-    reasoning: str
+    suggested_access_modes: list[AccessMode] = field(default_factory=list)
+    confidence: float = 0.0
+    reasoning: str = ""
     similar_cases: list[TestCase] = field(default_factory=list)
+
+    @property
+    def suggested_annotations_java(self) -> str:
+        """Return all suggested annotations as Java source lines."""
+        return "\n".join(am.to_java() for am in self.suggested_access_modes)
 
 
 @dataclass
@@ -40,6 +85,7 @@ class AgentState:
 
     # Scanner output
     test_files: Annotated[list[str], operator.add] = field(default_factory=list)
+    resources: list[Resource] = field(default_factory=list)
 
     # Parser output
     annotated_tests: Annotated[list[TestCase], operator.add] = field(

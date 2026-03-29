@@ -15,6 +15,18 @@ class TestScanner:
         assert "AnnotatedTest.java" in filenames
         assert "UnannotatedTest.java" in filenames
 
+    def test_scan_finds_system_resources(self, maven_project):
+        state = AgentState(project_path=str(maven_project))
+        result = scan_project(state)
+
+        resources = result.get("resources", [])
+        assert len(resources) == 4
+        res_ids = [r.res_id for r in resources]
+        assert "LoginService" in res_ids
+        assert "OpenVidu" in res_ids
+        assert "Course" in res_ids
+        assert "Database" in res_ids
+
     def test_scan_empty_project(self, empty_project):
         state = AgentState(project_path=str(empty_project))
         result = scan_project(state)

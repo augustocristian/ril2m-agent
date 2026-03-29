@@ -80,7 +80,15 @@ def analyze(
                     "class": s.test_case.class_name,
                     "method": s.test_case.method_name,
                     "file": s.test_case.file_path,
-                    "suggested_annotation": s.suggested_annotation,
+                    "suggested_access_modes": [
+                        {
+                            "resID": am.res_id,
+                            "concurrency": am.concurrency,
+                            "sharing": am.sharing,
+                            "accessMode": am.access_mode,
+                        }
+                        for am in s.suggested_access_modes
+                    ],
                     "confidence": s.confidence,
                     "reasoning": s.reasoning,
                 }
@@ -97,18 +105,19 @@ def analyze(
         return
 
     # Rich table output
-    table = Table(title="@AccessMode Annotation Suggestions")
+    table = Table(title="RETORCH @AccessMode Annotation Suggestions")
     table.add_column("Class", style="cyan")
     table.add_column("Method", style="magenta")
-    table.add_column("Suggestion", style="green")
+    table.add_column("Annotations", style="green")
     table.add_column("Confidence", justify="right")
     table.add_column("Reasoning")
 
     for s in suggestions:
+        annotations_str = "\n".join(am.to_java() for am in s.suggested_access_modes)
         table.add_row(
             s.test_case.class_name,
             s.test_case.method_name,
-            s.suggested_annotation,
+            annotations_str or "(none)",
             f"{s.confidence:.0%}",
             s.reasoning,
         )

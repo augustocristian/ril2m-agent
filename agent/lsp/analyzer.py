@@ -7,12 +7,31 @@ that the LSP server can cache and convert to diagnostics / code actions.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from agent.graph import build_graph
 from agent.state import AgentState
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AccessModeSuggestion:
+    """A single @AccessMode annotation suggestion."""
+
+    res_id: str
+    concurrency: int
+    sharing: bool
+    access_mode: str
+
+    def to_java(self) -> str:
+        sharing_str = "true" if self.sharing else "false"
+        return (
+            f'@AccessMode(resID = "{self.res_id}", '
+            f"concurrency = {self.concurrency}, "
+            f"sharing = {sharing_str}, "
+            f'accessMode = "{self.access_mode}")'
+        )
 
 
 @dataclass(frozen=True)
@@ -22,9 +41,13 @@ class SuggestionResult:
     file_path: str
     class_name: str
     method_name: str
-    suggested_annotation: str
-    confidence: float
-    reasoning: str
+    suggested_access_modes: tuple[AccessModeSuggestion, ...] = ()
+    confidence: float = 0.0
+    reasoning: str = ""
+
+    @property
+    def suggested_annotations_java(self) -> str:
+        return "\n".join(am.to_java() for am in self.suggested_access_modes)
 
 
 def analyze_workspace(project_path: str) -> list[SuggestionResult]:
@@ -37,7 +60,6 @@ def analyze_workspace(project_path: str) -> list[SuggestionResult]:
 
     result = graph.invoke(initial_state)
 
-    # Extract suggestions from the result
     suggestions_raw = (
         result.suggestions
         if hasattr(result, "suggestions")
@@ -51,7 +73,15 @@ def analyze_workspace(project_path: str) -> list[SuggestionResult]:
                 file_path=s.test_case.file_path,
                 class_name=s.test_case.class_name,
                 method_name=s.test_case.method_name,
-                suggested_annotation=s.suggested_annotation,
+                suggested_access_modes=tuple(
+                    AccessModeSuggestion(
+                        res_id=am.res_id,
+                        concurrency=am.concurrency,
+                        sharing=am.sharing,
+                        access_mode=am.access_mode,
+                    )
+                    for am in s.suggested_access_modes
+                ),
                 confidence=s.confidence,
                 reasoning=s.reasoning,
             )

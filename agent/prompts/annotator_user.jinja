@@ -3,7 +3,10 @@
 {% if similar_cases %}
 {% for case in similar_cases %}
 ### Example {{ loop.index }}: {{ case.class_name }}.{{ case.method_name }}
-Annotation: @AccessMode("{{ case.access_mode }}")
+Annotations:
+{% for am in case.access_modes %}
+  {{ am }}
+{% endfor %}
 ```java
 {{ case.body }}
 ```
@@ -23,4 +26,4 @@ File: {{ file_path }}
 {{ method_body }}
 ```
 
-What @AccessMode annotation should this test have?
+What @AccessMode annotations should this test have?

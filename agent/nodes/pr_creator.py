@@ -18,7 +18,7 @@ _BRANCH_NAME = "ril2m/add-access-mode-annotations"
 
 
 def _apply_annotation(suggestion: AnnotationSuggestion) -> bool:
-    """Insert the suggested @AccessMode annotation into the source file.
+    """Insert the suggested @AccessMode annotations into the source file.
 
     Returns True if the file was modified, False otherwise.
     """
@@ -27,12 +27,13 @@ def _apply_annotation(suggestion: AnnotationSuggestion) -> bool:
         logger.warning("File not found: %s", file_path)
         return False
 
+    if not suggestion.suggested_access_modes:
+        return False
+
     source = file_path.read_text(encoding="utf-8")
 
     # Ensure the @AccessMode import exists
-    access_mode_import = "import giis.visualassert.portable.AccessMode;"
     if "import" in source and "AccessMode" not in source:
-        # Insert after the last import statement
         last_import = max(
             (m.end() for m in re.finditer(r"^import\s+[^;]+;", source, re.MULTILINE)),
             default=0,
@@ -40,23 +41,40 @@ def _apply_annotation(suggestion: AnnotationSuggestion) -> bool:
         if last_import > 0:
             source = (
                 source[:last_import]
-                + f"\n{access_mode_import}"
+                + "\nimport giis.retorch.annotations.AccessMode;"
                 + source[last_import:]
             )
 
-    # Find the test method and insert the annotation before it
     tc = suggestion.test_case
-    # Build a pattern to find the method declaration
-    # Look for the @Test annotation line preceding the method
+
+    # Build annotation lines
+    annotation_lines = "\n".join(
+        am.to_java() for am in suggestion.suggested_access_modes
+    )
+
+    # Find the test method and insert annotations before it.
+    # Look for @Test / @ParameterizedTest preceding the method.
     pattern = re.compile(
-        rf"([ \t]*@Test[^\n]*\n)"  # @Test annotation line
+        rf"([ \t]*)(@(?:Test|ParameterizedTest|RepeatedTest)[^\n]*\n)"
         rf"([ \t]*(?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(tc.method_name)}\s*\()",
         re.MULTILINE,
     )
 
     match = pattern.search(source)
-    if not match:
-        # Fallback: try without @Test preceding directly
+    if match:
+        indent = match.group(1)
+        insert_pos = match.start()
+        indented_annotations = "\n".join(
+            f"{indent}{line}" for line in annotation_lines.splitlines()
+        )
+        source = (
+            source[:insert_pos]
+            + indented_annotations
+            + "\n"
+            + source[insert_pos:]
+        )
+    else:
+        # Fallback: insert directly above void methodName(
         pattern2 = re.compile(
             rf"([ \t]*)((?:public\s+|protected\s+|private\s+)?(?:static\s+)?void\s+{re.escape(tc.method_name)}\s*\()",
             re.MULTILINE,
@@ -69,19 +87,20 @@ def _apply_annotation(suggestion: AnnotationSuggestion) -> bool:
             return False
         indent = match2.group(1)
         insert_pos = match2.start()
-        annotation_line = f"{indent}{suggestion.suggested_annotation}\n"
-        source = source[:insert_pos] + annotation_line + source[insert_pos:]
-    else:
-        # Insert the annotation before @Test
-        indent = re.match(r"([ \t]*)", match.group(1)).group(1)
-        insert_pos = match.start()
-        annotation_line = f"{indent}{suggestion.suggested_annotation}\n"
-        source = source[:insert_pos] + annotation_line + source[insert_pos:]
+        indented_annotations = "\n".join(
+            f"{indent}{line}" for line in annotation_lines.splitlines()
+        )
+        source = (
+            source[:insert_pos]
+            + indented_annotations
+            + "\n"
+            + source[insert_pos:]
+        )
 
     file_path.write_text(source, encoding="utf-8")
     logger.info(
-        "Applied %s to %s.%s",
-        suggestion.suggested_annotation,
+        "Applied %d @AccessMode annotation(s) to %s.%s",
+        len(suggestion.suggested_access_modes),
         tc.class_name,
         tc.method_name,
     )
@@ -121,31 +140,29 @@ def create_pr(state: AgentState) -> dict:
     # 2. Commit changes with gitpython
     repo = Repo(state.project_path)
 
-    # Create and checkout a new branch
     if _BRANCH_NAME in [b.name for b in repo.branches]:
         repo.git.checkout(_BRANCH_NAME)
     else:
         repo.git.checkout("-b", _BRANCH_NAME)
 
-    # Stage modified files
     unique_files = list(set(modified_files))
     repo.index.add(unique_files)
 
     # Build commit message
     summary_lines = []
     for s in state.suggestions:
+        am_count = len(s.suggested_access_modes)
         summary_lines.append(
             f"  - {s.test_case.class_name}.{s.test_case.method_name}: "
-            f"{s.suggested_annotation} (confidence: {s.confidence:.0%})"
+            f"{am_count} annotation(s) (confidence: {s.confidence:.0%})"
         )
     commit_msg = (
-        "Add @AccessMode annotations to test methods\n\n"
+        "Add @AccessMode annotations to test methods (RETORCH)\n\n"
         "Annotations suggested by RIL2M Agent (RAG + Ollama):\n"
         + "\n".join(summary_lines)
     )
     repo.index.commit(commit_msg)
 
-    # Push the branch
     origin = repo.remote("origin")
     origin.push(_BRANCH_NAME)
     logger.info("Pushed branch %s to origin.", _BRANCH_NAME)
@@ -156,23 +173,24 @@ def create_pr(state: AgentState) -> dict:
     gh_repo = gh.get_repo(f"{settings.github_owner}/{settings.github_repo}")
 
     pr_body = (
-        "## @AccessMode Annotation Suggestions\n\n"
+        "## RETORCH @AccessMode Annotation Suggestions\n\n"
         "This PR was automatically generated by the **RIL2M Agent**.\n\n"
         "The agent used a RAG pipeline (Ollama embeddings + ChromaDB) to find "
         "similar annotated test cases and an LLM to suggest the appropriate "
-        "`@AccessMode` annotation for each unannotated test method.\n\n"
+        "`@AccessMode` annotations for each unannotated test method.\n\n"
         "### Suggestions\n\n"
-        "| Class | Method | Annotation | Confidence |\n"
-        "| ----- | ------ | ---------- | ---------- |\n"
+        "| Class | Method | Annotations | Confidence |\n"
+        "| ----- | ------ | ----------- | ---------- |\n"
     )
     for s in state.suggestions:
+        annotations_str = "<br>".join(
+            f"`{am.to_java()}`" for am in s.suggested_access_modes
+        )
         pr_body += (
             f"| {s.test_case.class_name} | {s.test_case.method_name} "
-            f"| `{s.suggested_annotation}` | {s.confidence:.0%} |\n"
+            f"| {annotations_str} | {s.confidence:.0%} |\n"
         )
-    pr_body += (
-        "\n### Reasoning\n\n"
-    )
+    pr_body += "\n### Reasoning\n\n"
     for s in state.suggestions:
         pr_body += (
             f"- **{s.test_case.class_name}.{s.test_case.method_name}**: "
@@ -180,7 +198,7 @@ def create_pr(state: AgentState) -> dict:
         )
 
     pr = gh_repo.create_pull(
-        title="Add @AccessMode annotations to test methods",
+        title="Add @AccessMode annotations to test methods (RETORCH)",
         body=pr_body,
         head=_BRANCH_NAME,
         base=settings.github_base_branch,

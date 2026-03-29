@@ -1,7 +1,6 @@
 """Shared pytest fixtures for RIL2M agent tests."""
 
-import os
-import tempfile
+import json
 from pathlib import Path
 
 import pytest
@@ -9,10 +8,11 @@ import pytest
 
 @pytest.fixture
 def maven_project(tmp_path: Path) -> Path:
-    """Create a minimal Maven project with Java test files for testing."""
-    # Create Maven structure
+    """Create a minimal Maven project with RETORCH-style Java test files."""
     test_dir = tmp_path / "src" / "test" / "java" / "com" / "example"
     test_dir.mkdir(parents=True)
+    resources_dir = tmp_path / "src" / "test" / "resources"
+    resources_dir.mkdir(parents=True)
 
     # pom.xml
     (tmp_path / "pom.xml").write_text(
@@ -21,45 +21,57 @@ def maven_project(tmp_path: Path) -> Path:
         "<version>1.0</version></project>\n"
     )
 
-    # Test file WITH @AccessMode annotations
+    # SystemResources.json
+    (resources_dir / "ExampleSystemResources.json").write_text(
+        json.dumps([
+            {"resID": "LoginService", "name": "Login Service", "type": "service"},
+            {"resID": "OpenVidu", "name": "OpenVidu Server", "type": "service"},
+            {"resID": "Course", "name": "Course Resource", "type": "entity"},
+            {"resID": "Database", "name": "MySQL Database", "type": "database"},
+        ])
+    )
+
+    # Test file WITH RETORCH @AccessMode annotations
     (test_dir / "AnnotatedTest.java").write_text(
         '''\
 package com.example;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class AnnotatedTest {
 
-    @AccessMode("READONLY")
+    @AccessMode(resID = "LoginService", concurrency = 10, sharing = true, accessMode = "READONLY")
+    @AccessMode(resID = "Course", concurrency = 10, sharing = true, accessMode = "READONLY")
     @Test
-    public void testFindAllUsers() {
-        List<User> users = userRepository.findAll();
-        assertNotNull(users);
-        assertFalse(users.isEmpty());
+    public void testViewCourse() {
+        this.user = setupBrowser("chrome", TJOB_NAME, usermail, WAIT_SECONDS);
+        driver = user.getDriver();
+        this.slowLogin(user, usermail, password);
+        driver.findElement(By.id("course-list")).click();
     }
 
-    @AccessMode("READWRITE")
-    @Test
-    public void testCreateUser() {
-        User user = new User("test@example.com");
-        User saved = userRepository.save(user);
-        assertNotNull(saved.getId());
-        assertEquals("test@example.com", saved.getEmail());
+    @AccessMode(resID = "LoginService", concurrency = 10, sharing = true, accessMode = "READONLY")
+    @AccessMode(resID = "OpenVidu", concurrency = 10, sharing = true, accessMode = "NOACCESS")
+    @AccessMode(resID = "Course", concurrency = 1, sharing = false, accessMode = "READWRITE")
+    @ParameterizedTest
+    @MethodSource("data")
+    void forumNewEntryTest(String usermail, String password, String role) {
+        this.user = setupBrowser("chrome", TJOB_NAME, usermail, WAIT_SECONDS);
+        driver = user.getDriver();
+        this.slowLogin(user, usermail, password);
+        driver.findElement(By.id("new-entry-btn")).click();
+        driver.findElement(By.id("entry-title")).sendKeys("Test Entry");
+        driver.findElement(By.id("submit-btn")).click();
     }
 
-    @AccessMode("READWRITE")
+    @AccessMode(resID = "Database", concurrency = 1, sharing = false, accessMode = "READWRITE")
     @Test
-    public void testDeleteUser() {
-        userRepository.deleteById(1L);
-        assertFalse(userRepository.existsById(1L));
-    }
-
-    @AccessMode("READONLY")
-    @Test
-    public void testCountUsers() {
-        long count = userRepository.count();
-        assertTrue(count >= 0);
+    public void testDeleteRecord() {
+        repository.deleteById(1L);
+        assertFalse(repository.existsById(1L));
     }
 }
 '''
@@ -71,29 +83,33 @@ public class AnnotatedTest {
 package com.example;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class UnannotatedTest {
 
-    @Test
-    public void testGetUserById() {
-        User user = userRepository.findById(1L).orElse(null);
-        assertNotNull(user);
+    @ParameterizedTest
+    @MethodSource("data")
+    void forumLoadEntriesTest(String usermail, String password, String role) {
+        this.user = setupBrowser("chrome", TJOB_NAME + "_" + TEST_NAME, usermail, WAIT_SECONDS);
+        driver = user.getDriver();
+        this.slowLogin(user, usermail, password);
     }
 
     @Test
-    public void testUpdateUserEmail() {
-        User user = userRepository.findById(1L).orElse(null);
-        user.setEmail("new@example.com");
-        userRepository.save(user);
-        User updated = userRepository.findById(1L).orElse(null);
-        assertEquals("new@example.com", updated.getEmail());
+    public void testEditCourse() {
+        this.user = setupBrowser("chrome", TJOB_NAME, usermail, WAIT_SECONDS);
+        driver = user.getDriver();
+        this.slowLogin(user, usermail, password);
+        driver.findElement(By.id("edit-course")).click();
+        driver.findElement(By.id("save-btn")).click();
     }
 
     @Test
-    public void testListActiveUsers() {
-        List<User> active = userRepository.findByActiveTrue();
-        assertNotNull(active);
+    public void testCheckDatabase() {
+        long count = repository.count();
+        assertTrue(count >= 0);
     }
 }
 '''
