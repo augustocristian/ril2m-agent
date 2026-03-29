@@ -127,5 +127,13 @@ def serve() -> None:
     mcp_main()
 
 
+@app.command()
+def lsp() -> None:
+    """Start the LSP server for VS Code integration (stdio transport)."""
+    from agent.lsp.server import main as lsp_main
+
+    lsp_main()
+
+
 if __name__ == "__main__":
     app()

@@ -24,7 +24,7 @@
   "activationEvents": [
     "workspaceContains:pom.xml"
   ],
-  "main": "./out/extension.js",
+  "main": "./extension.js",
   "contributes": {
     "commands": [
       {
@@ -46,66 +46,8 @@
         "command": "ril2m.createPR",
         "title": "RIL2M: Create Pull Request with Annotations",
         "icon": "$(git-pull-request)"
-      },
-      {
-        "command": "ril2m.refreshSuggestions",
-        "title": "RIL2M: Refresh Suggestions",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "ril2m.clearSuggestions",
-        "title": "RIL2M: Clear All Suggestions",
-        "icon": "$(clear-all)"
       }
     ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "ril2m",
-          "title": "RIL2M Agent",
-          "icon": "resources/icon.svg"
-        }
-      ]
-    },
-    "views": {
-      "ril2m": [
-        {
-          "id": "ril2m.suggestions",
-          "name": "Annotation Suggestions"
-        },
-        {
-          "id": "ril2m.summary",
-          "name": "Analysis Summary",
-          "type": "webview"
-        }
-      ]
-    },
-    "menus": {
-      "view/title": [
-        {
-          "command": "ril2m.analyzeProject",
-          "when": "view == ril2m.suggestions",
-          "group": "navigation"
-        },
-        {
-          "command": "ril2m.refreshSuggestions",
-          "when": "view == ril2m.suggestions",
-          "group": "navigation"
-        },
-        {
-          "command": "ril2m.clearSuggestions",
-          "when": "view == ril2m.suggestions",
-          "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "ril2m.applySuggestion",
-          "when": "view == ril2m.suggestions && viewItem == suggestion",
-          "group": "inline"
-        }
-      ]
-    },
     "configuration": {
       "title": "RIL2M Agent",
       "properties": {
@@ -113,11 +55,6 @@
           "type": "string",
           "default": "python",
           "description": "Path to the Python interpreter with ril2m-agent installed"
-        },
-        "ril2m.agentPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the ril2m-agent project root (if not installed globally)"
         },
         "ril2m.ollamaBaseUrl": {
           "type": "string",
@@ -138,31 +75,18 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically analyze project when opening a Maven workspace"
-        },
-        "ril2m.confidenceThreshold": {
-          "type": "number",
-          "default": 0.5,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Minimum confidence to show a suggestion (0.0 – 1.0)"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
     "package": "vsce package"
   },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "devDependencies": {
-    "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^7.0.0",
-    "@typescript-eslint/parser": "^7.0.0",
-    "eslint": "^8.56.0",
-    "typescript": "^5.3.0",
     "@vscode/vsce": "^2.22.0"
   }
 }

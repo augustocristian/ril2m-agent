@@ -194,6 +194,11 @@ ril2m-agent/
 │   │   ├── rag.py           # Build ChromaDB index, retrieve similar tests
 │   │   ├── annotator.py     # LLM suggestion via Ollama
 │   │   └── pr_creator.py    # Apply annotations + create GitHub PR
+│   ├── lsp/
+│   │   ├── __init__.py      # LSP package init
+│   │   ├── __main__.py      # python -m agent.lsp entry
+│   │   ├── server.py        # pygls LSP server (diagnostics, code lens, code actions)
+│   │   └── analyzer.py      # Bridge: runs LangGraph pipeline, returns results
 │   └── mcp/
 │       └── server.py        # MCP server (FastMCP, stdio transport)
 ├── tests/
@@ -201,18 +206,9 @@ ril2m-agent/
 │   ├── test_scanner.py      # Scanner node tests
 │   ├── test_parser.py       # Parser node tests
 │   └── test_rag.py          # RAG helper tests
-├── vscode-extension/            # VS Code extension
+├── vscode-extension/            # VS Code extension (thin JS shim)
 │   ├── package.json             # Extension manifest + settings
-│   ├── tsconfig.json            # TypeScript config
-│   └── src/
-│       ├── extension.ts         # Entry point, commands, activation
-│       ├── agent-client.ts      # Spawns ril2m CLI, parses JSON
-│       ├── types.ts             # Shared TypeScript types
-│       ├── suggestions-provider.ts  # Sidebar tree view
-│       ├── summary-view.ts      # Webview summary panel
-│       ├── codelens-provider.ts # Inline CodeLens above test methods
-│       ├── diagnostics.ts       # Warning diagnostics for missing annotations
-│       └── annotation-applier.ts # Applies annotations to source files
+│   └── extension.js             # ~20 lines: spawns Python LSP server
 ├── .env.example             # Environment variable template
 ├── pyproject.toml           # Project config and dependencies
 ├── CLAUDE.md                # Claude Code project context
@@ -221,36 +217,46 @@ ril2m-agent/
 
 ## VS Code Extension
 
-The project includes a VS Code extension that provides a graphical interface for the agent.
+The project includes a VS Code extension that provides a graphical interface for the agent. The architecture is **100% Python** — all logic lives in a **pygls LSP server** (`agent/lsp/`). The VS Code side is a single `extension.js` file (~20 lines) that only spawns the Python process. No TypeScript, no build step for the Python code.
+
+### How it works
+
+```
+VS Code  ←──LSP (stdio)──→  Python LSP server (pygls)
+                                  │
+                                  └──→ LangGraph pipeline
+                                          │
+                                    Ollama + ChromaDB
+```
+
+The extension activates when VS Code opens a workspace containing a `pom.xml`. It starts the Python LSP server which communicates via standard Language Server Protocol over stdio.
 
 ### Features
 
-- **Sidebar panel** — dedicated activity bar icon with a tree view listing all suggestions grouped by file, and a summary webview with statistics.
-- **CodeLens** — inline `Apply @AccessMode(…)` buttons above unannotated test methods in Java files.
-- **Diagnostics** — yellow warning squiggles on methods missing `@AccessMode`, with the suggestion in the message.
+- **CodeLens** — inline `Apply @AccessMode(…)` buttons above unannotated test methods, with confidence percentage and reasoning.
+- **Diagnostics** — yellow warning squiggles on methods missing `@AccessMode`, with the suggested annotation in the message.
+- **Code Actions (Quick Fix)** — lightbulb quick fix menu on each diagnostic to apply the annotation with a single click.
 - **Commands** — accessible via the Command Palette (`Ctrl+Shift+P`):
+
   | Command | Description |
   |---------|-------------|
-  | `RIL2M: Analyze Project` | Run the agent pipeline and display suggestions |
+  | `RIL2M: Analyze Project` | Run the full agent pipeline on the workspace |
   | `RIL2M: Apply Suggested Annotation` | Apply a single annotation to the source file |
   | `RIL2M: Apply All Suggestions` | Apply every suggestion at once |
   | `RIL2M: Create Pull Request` | Apply annotations and create a GitHub PR |
-  | `RIL2M: Refresh Suggestions` | Re-run the analysis |
-  | `RIL2M: Clear All Suggestions` | Clear all results |
 
-### Building the extension
+### Building and installing
 
 ```bash
+# 1. Install the Python agent (must be on PATH or configured via ril2m.pythonPath)
+pip install .
+
+# 2. Build the VS Code extension
 cd vscode-extension
 npm install
-npm run compile          # TypeScript → JavaScript
-npm run package          # produces a .vsix file
-```
+npm run package          # produces ril2m-agent-0.1.0.vsix
 
-### Installing
-
-```bash
-# Install the .vsix in VS Code
+# 3. Install in VS Code
 code --install-extension ril2m-agent-0.1.0.vsix
 ```
 
@@ -263,12 +269,10 @@ Configure via **Settings → Extensions → RIL2M Agent**:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `ril2m.pythonPath` | `python` | Python interpreter with ril2m-agent installed |
-| `ril2m.agentPath` | *(empty)* | Path to ril2m-agent project (if not installed globally) |
 | `ril2m.ollamaBaseUrl` | `http://localhost:11434` | Ollama server URL |
 | `ril2m.ollamaModel` | `llama3.2` | LLM model |
 | `ril2m.ollamaEmbedModel` | `nomic-embed-text` | Embedding model |
 | `ril2m.autoAnalyze` | `false` | Auto-run analysis when opening a Maven workspace |
-| `ril2m.confidenceThreshold` | `0.5` | Minimum confidence to display a suggestion |
 
 ## Customizing Prompts
 

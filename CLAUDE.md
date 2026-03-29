@@ -16,6 +16,7 @@ It uses Ollama (local LLM + embeddings), ChromaDB for vector storage, and can cr
 - **PyGithub + GitPython** – PR creation
 - **Typer + Rich** – CLI
 - **Jinja2** – prompt templates (`agent/prompts/*.jinja`)
+- **pygls** – Python LSP server for VS Code integration
 - **Pydantic Settings** – configuration from `.env`
 - **pytest** – testing
 
