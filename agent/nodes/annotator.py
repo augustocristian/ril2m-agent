@@ -9,61 +9,30 @@ from langchain_ollama import ChatOllama
 
 from agent.config import get_settings
 from agent.nodes.rag import retrieve_similar
+from agent.prompts import load_prompt
 from agent.state import AgentState, AnnotationSuggestion, TestCase
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """\
-You are an expert Java testing assistant. Your task is to suggest the correct
-@AccessMode annotation for a Java test method.
-
-@AccessMode is used to declare the database access mode required by a test:
-- @AccessMode("READONLY")  – the test only reads data, no inserts/updates/deletes.
-- @AccessMode("READWRITE") – the test reads AND writes (inserts, updates, or deletes).
-- @AccessMode("WRITEONLY") – the test only writes data.
-- @AccessMode("NOACCESS")  – the test does not access the database at all.
-
-Analyze the test method body and its similar annotated examples to determine the
-correct annotation.
-
-Respond with EXACTLY this format (no extra text):
-ANNOTATION: @AccessMode("<VALUE>")
-CONFIDENCE: <0.0 to 1.0>
-REASONING: <one-line explanation>
-"""
-
-_USER_PROMPT = """\
-## Similar annotated test cases (for reference)
-
-{similar_cases}
-
-## Test method to annotate
-
-Class: {class_name}
-Method: {method_name}
-File: {file_path}
-
-```java
-{method_body}
-```
-
-What @AccessMode annotation should this test have?
-"""
+# Load Jinja2 templates from agent/prompts/
+_system_template = load_prompt("annotator_system.jinja")
+_user_template = load_prompt("annotator_user.jinja")
 
 
-def _format_similar_cases(docs: list) -> str:
-    """Format retrieved documents into a readable block."""
-    if not docs:
-        return "(no similar annotated tests found)"
-    parts = []
-    for i, doc in enumerate(docs, 1):
+def _build_similar_cases_ctx(docs: list) -> list[dict]:
+    """Convert retrieved documents into template-friendly dicts."""
+    cases = []
+    for doc in docs:
         meta = doc.metadata
-        parts.append(
-            f"### Example {i}: {meta.get('class_name', '?')}.{meta.get('method_name', '?')}\n"
-            f"Annotation: @AccessMode(\"{meta.get('access_mode', '?')}\")\n"
-            f"```java\n{doc.page_content}\n```"
+        cases.append(
+            {
+                "class_name": meta.get("class_name", "?"),
+                "method_name": meta.get("method_name", "?"),
+                "access_mode": meta.get("access_mode", "?"),
+                "body": doc.page_content,
+            }
         )
-    return "\n\n".join(parts)
+    return cases
 
 
 def _parse_llm_response(text: str) -> tuple[str, float, str]:
@@ -100,10 +69,8 @@ def suggest_annotations(state: AgentState) -> dict:
         temperature=0.1,
     )
 
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", _SYSTEM_PROMPT), ("human", _USER_PROMPT)]
-    )
-    chain = prompt | llm
+    # Render system prompt once (it has no per-test variables)
+    system_text = _system_template.render()
 
     suggestions: list[AnnotationSuggestion] = []
 
@@ -114,7 +81,7 @@ def suggest_annotations(state: AgentState) -> dict:
         similar_docs = (
             retrieve_similar(tc) if state.rag_ready else []
         )
-        similar_text = _format_similar_cases(similar_docs)
+        similar_cases_ctx = _build_similar_cases_ctx(similar_docs)
 
         # Build similar TestCase references for the suggestion
         similar_tcs: list[TestCase] = []
@@ -130,16 +97,22 @@ def suggest_annotations(state: AgentState) -> dict:
                 )
             )
 
+        # Render user prompt with Jinja2
+        user_text = _user_template.render(
+            similar_cases=similar_cases_ctx,
+            class_name=tc.class_name,
+            method_name=tc.method_name,
+            file_path=tc.file_path,
+            method_body=tc.method_body,
+        )
+
+        prompt = ChatPromptTemplate.from_messages(
+            [("system", system_text), ("human", user_text)]
+        )
+        chain = prompt | llm
+
         try:
-            response = chain.invoke(
-                {
-                    "similar_cases": similar_text,
-                    "class_name": tc.class_name,
-                    "method_name": tc.method_name,
-                    "file_path": tc.file_path,
-                    "method_body": tc.method_body,
-                }
-            )
+            response = chain.invoke({})
             annotation, confidence, reasoning = _parse_llm_response(
                 response.content
             )

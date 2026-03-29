@@ -1,0 +1,26 @@
+## Similar annotated test cases (for reference)
+
+{% if similar_cases %}
+{% for case in similar_cases %}
+### Example {{ loop.index }}: {{ case.class_name }}.{{ case.method_name }}
+Annotation: @AccessMode("{{ case.access_mode }}")
+```java
+{{ case.body }}
+```
+
+{% endfor %}
+{% else %}
+(no similar annotated tests found)
+{% endif %}
+
+## Test method to annotate
+
+Class: {{ class_name }}
+Method: {{ method_name }}
+File: {{ file_path }}
+
+```java
+{{ method_body }}
+```
+
+What @AccessMode annotation should this test have?

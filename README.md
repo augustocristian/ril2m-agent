@@ -184,6 +184,10 @@ ril2m-agent/
 │   ├── config.py            # Pydantic settings (env vars / .env)
 │   ├── graph.py             # LangGraph workflow definition
 │   ├── state.py             # State dataclasses (TestCase, AgentState, etc.)
+│   ├── prompts/             # Jinja2 prompt templates
+│   │   ├── __init__.py      # Template loader (load_prompt helper)
+│   │   ├── annotator_system.jinja  # System prompt for annotation suggestion
+│   │   └── annotator_user.jinja    # User prompt (similar cases + target test)
 │   ├── nodes/
 │   │   ├── scanner.py       # Find Java test files in Maven projects
 │   │   ├── parser.py        # Parse test methods, classify by @AccessMode
@@ -201,6 +205,25 @@ ril2m-agent/
 ├── pyproject.toml           # Project config and dependencies
 ├── CLAUDE.md                # Claude Code project context
 └── README.md                # This file
+```
+
+## Customizing Prompts
+
+All LLM prompts are stored as **Jinja2 templates** in [`agent/prompts/`](agent/prompts/):
+
+| File | Purpose |
+|------|---------|
+| `annotator_system.jinja` | System prompt defining the LLM role and output format |
+| `annotator_user.jinja` | User prompt with similar-case examples and the target test |
+
+Templates use standard Jinja2 syntax (`{{ variable }}`, `{% for %}`, `{% if %}`, etc.) and are rendered at runtime by the annotator node. To customize the LLM behavior, edit the `.jinja` files directly — no Python changes needed.
+
+To add a new prompt, create a `.jinja` file in `agent/prompts/` and load it with:
+
+```python
+from agent.prompts import load_prompt
+template = load_prompt("my_new_prompt.jinja")
+rendered = template.render(variable="value")
 ```
 
 ## How It Works
