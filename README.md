@@ -2,7 +2,7 @@
 
 **LangGraph + MCP agent that suggests [RETORCH](https://giis-uniovi.github.io/retorch/) `@AccessMode` annotations for Java Maven test cases using RAG and Ollama.**
 
-The agent scans Java Maven projects, identifies test methods missing `@AccessMode` annotations, parses the project's `SystemResources.json` to know available resources, uses a RAG pipeline (Ollama embeddings + ChromaDB) to find similar already-annotated tests, and prompts an LLM to suggest the correct annotations (including `resID`, `concurrency`, `sharing`, and `accessMode` attributes). Each test can receive multiple `@AccessMode` annotations, one per resource. The agent can also create a GitHub Pull Request with the changes applied.
+The agent scans Java Maven projects, identifies test methods missing `@AccessMode` annotations, parses the project's `.retorch/<SUT>SystemResources.json` to know available resources, uses a RAG pipeline (Ollama embeddings + ChromaDB) to find similar already-annotated tests, and prompts an LLM to suggest the correct annotations (including `resID`, `concurrency`, `sharing`, and `accessMode` attributes). Each test can receive multiple `@AccessMode` annotations, one per resource. The agent can also **suggest new resources** not yet in the JSON file and **create a GitHub Pull Request** with annotations and new resources applied.
 
 ## Architecture
 
@@ -28,11 +28,11 @@ The agent scans Java Maven projects, identifies test methods missing `@AccessMod
 
 ### Pipeline Steps
 
-1. **Scanner** – Recursively finds `.java` test files under `src/test/java` in Maven projects (supports multi-module projects).
-2. **Parser** – Extracts test methods using regex, classifies them as annotated (has `@AccessMode`) or non-annotated.
+1. **Scanner** – Recursively finds `.java` test files under `src/test/java` in Maven projects (supports multi-module). Discovers `.retorch/<SUT>SystemResources.json` to know available resources.
+2. **Parser** – Extracts test methods using regex, classifies them as annotated (has `@AccessMode`) or non-annotated. Parses all four annotation attributes.
 3. **RAG Index** – Embeds annotated test method bodies (without the annotation) into ChromaDB using Ollama embeddings (`nomic-embed-text`).
-4. **Annotator** – For each non-annotated test, retrieves the *k* most similar annotated tests from the vector store, then prompts the Ollama LLM to suggest the correct `@AccessMode` value.
-5. **PR Creator** *(optional)* – Applies the annotations to source files, commits, pushes a branch, and opens a GitHub PR.
+4. **Annotator** – For each non-annotated test, retrieves the *k* most similar annotated tests from the vector store, then prompts the Ollama LLM to suggest the correct `@AccessMode` annotations. Can also suggest **new resources** that should be added to `SystemResources.json`.
+5. **PR Creator** *(optional)* – Applies annotations to source files, adds new resources to `SystemResources.json`, commits, pushes a branch, and opens a GitHub PR.
 
 ## Prerequisites
 
@@ -153,10 +153,12 @@ result = graph.invoke(
 )
 
 for suggestion in result.suggestions:
-    print(
-        f"{suggestion.test_case.class_name}.{suggestion.test_case.method_name}: "
-        f"{suggestion.suggested_annotation} ({suggestion.confidence:.0%})"
-    )
+    print(f"{suggestion.test_case.class_name}.{suggestion.test_case.method_name}:")
+    for am in suggestion.suggested_access_modes:
+        print(f"  {am.to_java()}")
+    for nr in suggestion.new_resources:
+        print(f"  NEW RESOURCE: {nr.resource.resource_id} — {nr.reasoning}")
+    print(f"  Confidence: {suggestion.confidence:.0%}")
 ```
 
 ## Running Tests
@@ -183,17 +185,18 @@ ril2m-agent/
 │   ├── cli.py               # Typer CLI entry point
 │   ├── config.py            # Pydantic settings (env vars / .env)
 │   ├── graph.py             # LangGraph workflow definition
-│   ├── state.py             # State dataclasses (TestCase, AgentState, etc.)
+│   ├── state.py             # State dataclasses (TestCase, Resource, AgentState, etc.)
+│   ├── resources.py         # Shared resource management (load/save/add/format)
 │   ├── prompts/             # Jinja2 prompt templates
 │   │   ├── __init__.py      # Template loader (load_prompt helper)
 │   │   ├── annotator_system.jinja  # System prompt for annotation suggestion
 │   │   └── annotator_user.jinja    # User prompt (similar cases + target test)
 │   ├── nodes/
-│   │   ├── scanner.py       # Find Java test files in Maven projects
+│   │   ├── scanner.py       # Find Java test files + .retorch/ resources
 │   │   ├── parser.py        # Parse test methods, classify by @AccessMode
 │   │   ├── rag.py           # Build ChromaDB index, retrieve similar tests
-│   │   ├── annotator.py     # LLM suggestion via Ollama
-│   │   └── pr_creator.py    # Apply annotations + create GitHub PR
+│   │   ├── annotator.py     # LLM suggestion via Ollama (incl. new resources)
+│   │   └── pr_creator.py    # Apply annotations + new resources + GitHub PR
 │   ├── lsp/
 │   │   ├── __init__.py      # LSP package init
 │   │   ├── __main__.py      # python -m agent.lsp entry
@@ -202,7 +205,7 @@ ril2m-agent/
 │   └── mcp/
 │       └── server.py        # MCP server (FastMCP, stdio transport)
 ├── tests/
-│   ├── conftest.py          # Shared fixtures (sample Maven project)
+│   ├── conftest.py          # Shared fixtures (sample Maven project with .retorch/)
 │   ├── test_scanner.py      # Scanner node tests
 │   ├── test_parser.py       # Parser node tests
 │   └── test_rag.py          # RAG helper tests
@@ -233,9 +236,9 @@ The extension activates when VS Code opens a workspace containing a `pom.xml`. I
 
 ### Features
 
-- **CodeLens** — inline `Apply @AccessMode(…)` buttons above unannotated test methods, with confidence percentage and reasoning.
-- **Diagnostics** — yellow warning squiggles on methods missing `@AccessMode`, with the suggested annotation in the message.
-- **Code Actions (Quick Fix)** — lightbulb quick fix menu on each diagnostic to apply the annotation with a single click.
+- **CodeLens** — inline `Apply @AccessMode(…)` buttons above unannotated test methods, with confidence percentage and reasoning. Shows count of new resource suggestions if any.
+- **Diagnostics** — yellow warning squiggles on methods missing `@AccessMode`, with the suggested annotations and new resource info in the message.
+- **Code Actions (Quick Fix)** — lightbulb quick fix menu on each diagnostic to apply the annotation with a single click. Applying a suggestion also adds any new resources to `SystemResources.json`.
 - **Commands** — accessible via the Command Palette (`Ctrl+Shift+P`):
 
   | Command | Description |
@@ -280,7 +283,7 @@ All LLM prompts are stored as **Jinja2 templates** in [`agent/prompts/`](agent/p
 
 | File | Purpose |
 |------|---------|
-| `annotator_system.jinja` | System prompt defining the LLM role and output format |
+| `annotator_system.jinja` | System prompt defining the LLM role, output format, and resource list |
 | `annotator_user.jinja` | User prompt with similar-case examples and the target test |
 
 Templates use standard Jinja2 syntax (`{{ variable }}`, `{% for %}`, `{% if %}`, etc.) and are rendered at runtime by the annotator node. To customize the LLM behavior, edit the `.jinja` files directly — no Python changes needed.
@@ -300,9 +303,9 @@ rendered = template.render(variable="value")
 The [RETORCH](https://giis-uniovi.github.io/retorch/) framework uses `@AccessMode` annotations to declare which **Resources** a test case accesses and how. Each test method can have **multiple** `@AccessMode` annotations, one per Resource:
 
 ```java
-@AccessMode(resID = "LoginService", concurrency = 10, sharing = true, accessMode = "READONLY")
-@AccessMode(resID = "OpenVidu", concurrency = 10, sharing = true, accessMode = "NOACCESS")
-@AccessMode(resID = "Course", concurrency = 1, sharing = false, accessMode = "READWRITE")
+@AccessMode(resID = "loginservice", concurrency = 10, sharing = true, accessMode = "READONLY")
+@AccessMode(resID = "openvidu", concurrency = 10, sharing = true, accessMode = "NOACCESS")
+@AccessMode(resID = "course", concurrency = 1, sharing = false, accessMode = "READWRITE")
 @ParameterizedTest
 @MethodSource("data")
 void forumNewEntryTest(String usermail, String password, String role) { ... }
@@ -312,24 +315,68 @@ void forumNewEntryTest(String usermail, String password, String role) { ... }
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `resID` | String | Resource identifier (must match a resource in `<SUT>SystemResources.json`) |
+| `resID` | String | Resource identifier (must match a resource in `.retorch/<SUT>SystemResources.json`) |
 | `concurrency` | int | Upper bound of test cases that can access the resource concurrently |
 | `sharing` | boolean | Whether the resource can be shared between multiple test cases |
 | `accessMode` | String | Access type: `READONLY`, `READWRITE`, `WRITEONLY`, or `NOACCESS` |
 
-#### SystemResources.json
+#### .retorch/SystemResources.json
 
-Resources are declared in a `<SUT_NAME>SystemResources.json` file (typically under `src/test/resources`). The agent parses this file automatically to know what resources exist in the project and passes them to the LLM prompt.
+Resources are declared in a `.retorch/<SUT_NAME>SystemResources.json` file at the project root (or in child modules for multi-module Maven projects). The file uses a **dict keyed by resource ID**:
+
+```json
+{
+  "loginservice": {
+    "hierarchyParent": ["mysql"],
+    "replaceable": [],
+    "elasticityModel": {
+      "elasticityID": "elasmodelLoginService",
+      "elasticity": 5,
+      "elasticityCost": 15.0
+    },
+    "resourceType": "LOGICAL",
+    "resourceID": "loginservice",
+    "minimalCapacities": [
+      {"name": "memory", "quantity": 0.3},
+      {"name": "processor", "quantity": 0.2},
+      {"name": "storage", "quantity": 0.5}
+    ],
+    "dockerImage": "codeurjc/full-teaching_no-services-openvidu:latest"
+  }
+}
+```
+
+The agent parses this file automatically and passes the resource list to the LLM prompt. When the LLM detects that a test accesses a resource not in the file, it can suggest adding a new resource. The PR creator writes these new resources back to the JSON file.
+
+### New Resource Suggestions
+
+The agent can suggest new resources when it detects that a test method accesses something not defined in the current `SystemResources.json`. The LLM outputs `NEW_RESOURCE` lines alongside the regular `RESOURCE` lines. New resources are:
+
+- Shown in the CLI output as a separate table
+- Included in the JSON output under `new_resources`
+- Applied to `SystemResources.json` when creating a PR
+- Applied via the VS Code extension when using "Apply" actions
 
 ### RAG Pipeline
 
-1. **Scan** — Finds test files and parses `SystemResources.json` for available resources.
+1. **Scan** — Finds test files and parses `.retorch/<SUT>SystemResources.json` for available resources.
 2. **Parse** — Extracts test methods, parses their full `@AccessMode` annotations (all attributes), classifies as annotated/non-annotated.
 3. **Index** — Annotated test method bodies (without annotations) are embedded into ChromaDB so retrieval is based on code semantics.
 4. **Retrieve** — For each non-annotated test, the top-*k* most similar annotated tests are retrieved from the vector store.
-5. **Suggest** — The LLM receives the similar examples (with their full RETORCH annotations), the list of available resources, and the target method. It produces a structured suggestion with one or more `@AccessMode` annotations.
+5. **Suggest** — The LLM receives the similar examples (with their full RETORCH annotations), the list of available resources, and the target method. It produces a structured suggestion with one or more `@AccessMode` annotations and optionally new resource suggestions.
 
 This few-shot retrieval approach allows the LLM to learn the project's annotation conventions from real examples rather than relying solely on its general training data.
+
+### Shared Code Between Agent and VS Code Extension
+
+The agent pipeline and VS Code extension share key modules to reduce maintenance:
+
+| Module | Shared functionality |
+|--------|---------------------|
+| `agent/resources.py` | Loading, saving, adding resources to `SystemResources.json` |
+| `agent/prompts/` | Jinja2 prompt templates used by the annotator |
+| `agent/state.py` | Data model (`AccessMode`, `Resource`, `TestCase`, etc.) |
+| `agent/graph.py` | The LangGraph workflow itself (LSP analyzer calls `build_graph()`) |
 
 ## License
 

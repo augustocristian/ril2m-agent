@@ -50,12 +50,12 @@ class TestParser:
         assert len(forum_test.access_modes) == 3
 
         res_ids = [am.res_id for am in forum_test.access_modes]
-        assert "LoginService" in res_ids
-        assert "OpenVidu" in res_ids
-        assert "Course" in res_ids
+        assert "loginservice" in res_ids
+        assert "openvidu" in res_ids
+        assert "course" in res_ids
 
         # Check specific attributes
-        course_am = next(am for am in forum_test.access_modes if am.res_id == "Course")
+        course_am = next(am for am in forum_test.access_modes if am.res_id == "course")
         assert course_am.concurrency == 1
         assert course_am.sharing is False
         assert course_am.access_mode == "READWRITE"
@@ -77,7 +77,7 @@ class TestParser:
         assert view_test is not None
         assert len(view_test.access_modes) == 2
 
-        login_am = next(am for am in view_test.access_modes if am.res_id == "LoginService")
+        login_am = next(am for am in view_test.access_modes if am.res_id == "loginservice")
         assert login_am.concurrency == 10
         assert login_am.sharing is True
         assert login_am.access_mode == "READONLY"
