@@ -55,6 +55,6 @@ jobs:
       - name: Download coverage reports
         uses: actions/download-artifact@v8
       - name: SonarQubeScan
-        uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # V.6.0 lastest 05/10/2025
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # V.6.0 lastest 05/10/2025
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
