@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -55,6 +55,6 @@ jobs:
       - name: Download coverage reports
         uses: actions/download-artifact@v8
       - name: SonarQubeScan
-        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # V.6.0 lastest 05/10/2025
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # V.6.0 lastest 05/10/2025
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
